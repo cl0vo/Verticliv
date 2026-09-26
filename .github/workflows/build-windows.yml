@@ -3,7 +3,7 @@ name: Build Windows installer
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, feature/vertical-studio]
     paths:
       - 'src/**'
       - 'tests/**'
@@ -233,6 +233,13 @@ jobs:
             '--name', 'ARARA-Factory',
             '--paths', 'src',
             '--hidden-import', 'arara_factory.entry',
+            '--hidden-import', 'arara_factory.studio_ui',
+            '--hidden-import', 'arara_factory.studio_engine',
+            '--collect-all', 'faster_whisper',
+            '--collect-all', 'ctranslate2',
+            '--collect-all', 'tokenizers',
+            '--collect-all', 'onnxruntime',
+            '--collect-all', 'av',
             '--hidden-import', 'arara_factory.batch_worker',
             '--hidden-import', 'arara_factory.integrated_batch',
             '--hidden-import', 'arara_factory.process_utils',
@@ -320,7 +327,7 @@ jobs:
           if ($exists) {
             gh release upload $tag $asset --repo $repo --clobber
           } else {
-            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "Personal ARARA workflow update: reliable resumable YouTube uploads, safe paused/interval-spaced backlogs, single-item retry, validated vertical renders, and a configurable looping alpha banner."
+            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "Vertical Studio: editable Whisper captions, gaming layouts and saved projects; reliable YouTube uploads, safe queues, validated renders and a configurable alpha banner."
           }
           if ($LASTEXITCODE -ne 0) { throw 'Release publish failed' }
 

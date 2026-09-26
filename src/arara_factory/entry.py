@@ -51,4 +51,8 @@ def main() -> None:
     install_smart_ui(app_module)
     install_publishing_targets(app_module)
     install_publishing_reliable(app_module)
+    # Preserve the full legacy workflow as a secondary window.
+    from .studio_ui import StudioWindow
+    legacy_window = app_module.MainWindow
+    app_module.MainWindow = lambda: StudioWindow(legacy_factory=legacy_window)
     app_module.main()
