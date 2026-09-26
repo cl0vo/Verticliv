@@ -7,10 +7,10 @@ import subprocess
 import tempfile
 import time
 import wave
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
-from .process_utils import popen_hidden, keep_system_awake
+from .process_utils import popen_hidden, run_hidden, keep_system_awake
 from .render import _binary, probe_media
 from .subtitles import ass_time, _ass_escape, group_words
 from .transcribe import RecognizedWord
@@ -114,6 +114,28 @@ def binary(name):
     return value
 
 
+def source_info(source):
+    """Account for phone-video display rotation, applied automatically by FFmpeg/Qt."""
+    probe = binary('ffprobe')
+    info = probe_media(probe, Path(source))
+    result = run_hidden([probe, '-v', 'error', '-select_streams', 'v:0',
+        '-show_entries', 'stream_side_data=rotation:stream_tags=rotate', '-of', 'json', str(source)],
+        capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError(result.stderr[-2000:])
+    streams = json.loads(result.stdout).get('streams', [])
+    rotation = 0
+    if streams:
+        stream = streams[0]
+        rotation = float(stream.get('tags', {}).get('rotate', 0))
+        for side in stream.get('side_data_list', []):
+            if 'rotation' in side:
+                rotation = float(side['rotation'])
+    if round(rotation) % 180 == 90:
+        info = replace(info, width=info.height, height=info.width)
+    return info
+
+
 def run_ffmpeg(args, duration, progress=lambda n, s: None, cancel=lambda: False, cwd=None):
     """Bounded-memory, interruptible subprocess with temporary progress files."""
     check_cancel(cancel)
@@ -157,7 +179,7 @@ def transcribe(project, progress=lambda n, s: None, cancel=lambda: False):
         from faster_whisper import WhisperModel
     except ImportError as exc:
         raise RuntimeError('Не установлен faster-whisper. Обнови программу или выполни pip install faster-whisper.') from exc
-    info = probe_media(binary('ffprobe'), Path(project.source))
+    info = source_info(project.source)
     project.validate(info.duration)
     if not info.has_audio:
         raise ValueError('В видео нет аудиодорожки. Отключи субтитры для экспорта.')
@@ -250,7 +272,7 @@ def layout_graph(project, width, height):
 
 def export_video(project, target: Path, progress=lambda n, s: None, cancel=lambda: False):
     target = target.resolve()
-    info = probe_media(binary('ffprobe'), Path(project.source))
+    info = source_info(project.source)
     project.validate(info.duration)
     if Path(project.source).resolve() == target:
         raise ValueError('Нельзя перезаписать исходное видео')
@@ -310,7 +332,7 @@ def rank_highlights(energy, duration, clip_length=30, count=8):
 
 def find_highlights(source, clip_length=30, progress=lambda n, s: None, cancel=lambda: False):
     import numpy as np
-    info = probe_media(binary('ffprobe'), Path(source))
+    info = source_info(source)
     if not info.has_audio:
         raise ValueError('Для поиска по реакциям нужна аудиодорожка')
     with tempfile.TemporaryDirectory(prefix='vertical-highlights-') as td:

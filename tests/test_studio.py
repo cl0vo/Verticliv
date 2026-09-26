@@ -63,3 +63,15 @@ def test_real_export_layout_audio_captions_and_duration(tmp_path,layout,zoom,aud
     assert output.with_suffix('.srt').is_file()
     assert source.is_file()
     assert not list(tmp_path.glob('vertical-export-*'))
+
+
+@pytest.mark.skipif(not shutil.which('ffmpeg') or not shutil.which('ffprobe'),reason='FFmpeg required')
+def test_phone_rotation_is_applied_before_crop(tmp_path):
+    from arara_factory.studio_engine import source_info
+    raw,rotated=tmp_path/'raw.mp4',tmp_path/'phone.mp4'
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=640x360:rate=30','-t','1','-c:v','libx264',str(raw)],check=True)
+    subprocess.run(['ffmpeg','-v','error','-y','-display_rotation','90','-i',str(raw),'-c','copy',str(rotated)],check=True)
+    info=source_info(str(rotated))
+    assert (info.width,info.height)==(360,640)
+    p=StudioProject(source=str(rotated),end=.5,layout='fill',captions=False)
+    export_video(p,tmp_path/'vertical.mp4')

@@ -15,8 +15,8 @@ from PySide6.QtWidgets import (
 )
 
 from .studio_engine import (
-    StudioProject, Crop, Cancelled, fitted_crop, binary, transcribe,
-    export_video, find_highlights, probe_media,
+    StudioProject, Crop, fitted_crop, transcribe,
+    export_video, find_highlights, source_info,
 )
 from .transcribe import RecognizedWord
 
@@ -227,6 +227,9 @@ class StudioWindow(QMainWindow):
         self.recognize_button = self.button('Распознать выбранный фрагмент',self.recognize,tools_row)
         self.button('＋ Строка', self.add_word,tools_row)
         self.button('Удалить выбранные',self.delete_words,tools_row)
+        manual = QPushButton('Использовать таблицу без повторного распознавания')
+        manual.clicked.connect(self.accept_manual_captions)
+        caps.addWidget(manual)
         caps.addLayout(tools_row)
         caps.addWidget(QLabel('Тайминги в секундах исходного видео. Двойной клик — исправить текст.'))
         self.table = QTableWidget(0,3)
@@ -418,7 +421,7 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
         if self.task and self.task.isRunning():
             return
         try:
-            info = probe_media(binary('ffprobe'),Path(name))
+            info = source_info(name)
             candidate = project or StudioProject(source=str(Path(name).resolve()),end=min(60,info.duration),captions=info.has_audio)
             candidate.validate(info.duration)
             self.project,self.info = candidate,info
@@ -524,6 +527,14 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
             self.task.requestInterruption()
             self.status.setText('Отмена запрошена. При загрузке модели дождись её завершения.')
 
+    def accept_manual_captions(self):
+        try:
+            p = self.checked_project()
+            self.project.transcript_ranges.append([p.start, p.end])
+            self.status.setText('Для выбранного фрагмента будут использованы слова из таблицы.')
+        except Exception as exc:
+            self.failed(str(exc))
+
     def recognize(self):
         try:
             p = self.checked_project()
@@ -628,7 +639,9 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
                 fresh = None
                 if p.captions and not any(a <= p.start+.01 and b >= p.end-.01 for a,b in p.transcript_ranges):
                     fresh = transcribe(p,progress,cancel)
-                    p.words = [w for w in p.words if w.end <= p.start or w.start >= p.end]+fresh
+                    # Extending the selection must preserve already corrected words.
+                    fresh = [w for w in fresh if not any(w.start < old.end and w.end > old.start for old in p.words)]
+                    p.words = sorted(p.words + fresh, key=lambda w: w.start)
                 path = export_video(p,target,progress,cancel)
                 return path,p,fresh
             self.launch(operation,self.exported)
@@ -638,7 +651,9 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
     def exported(self,result):
         path,p,fresh = result
         if fresh is not None:
-            self.transcribed((p,fresh))
+            self.project.words = p.words
+            self.project.transcript_ranges.append([p.start,p.end])
+            self.fill_table()
         self.last_output = path
         self.progress.setValue(100)
         self.status.setText('Сохранено: '+path)
