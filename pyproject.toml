@@ -1,10 +1,11 @@
 [project]
 name = "arara-factory"
-version = "0.17.3"
-description = "Guided ARARA Factory with resumable YouTube uploads, persistent diagnostics and safe confirmed close"
+version = "0.18.0"
+description = "Vertical Studio: automatic captions, gaming layouts and vertical video editing"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26",
+  "faster-whisper>=1.1.1,<2",
   "Pillow>=10.4",
   "pydantic>=2.7",
   "PySide6>=6.7",

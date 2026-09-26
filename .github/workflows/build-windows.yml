@@ -3,7 +3,7 @@ name: Build Windows installer
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, feature/vertical-studio]
     paths:
       - 'src/**'
       - 'tests/**'
@@ -230,6 +230,13 @@ jobs:
             '--name', 'ARARA-Factory',
             '--paths', 'src',
             '--hidden-import', 'arara_factory.entry',
+            '--hidden-import', 'arara_factory.studio_ui',
+            '--hidden-import', 'arara_factory.studio_engine',
+            '--collect-all', 'faster_whisper',
+            '--collect-all', 'ctranslate2',
+            '--collect-all', 'tokenizers',
+            '--collect-all', 'onnxruntime',
+            '--collect-all', 'av',
             '--hidden-import', 'arara_factory.batch_worker',
             '--hidden-import', 'arara_factory.integrated_batch',
             '--hidden-import', 'arara_factory.process_utils',
@@ -315,7 +322,7 @@ jobs:
           if ($exists) {
             gh release upload $tag $asset --repo $repo --clobber
           } else {
-            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "Reliable publishing: persistent technical journal, explicit YouTube HTTP timeout and retries, exact platform errors, failed-item isolation so the queue continues, target-aware posting, and a simple Yes/No close confirmation that saves queue/settings before exit."
+            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "Vertical Studio: vertical layouts, webcam/game region selection, editable Whisper captions, SRT export, audio highlight candidates, zoom accents and saved projects. Brainrot remains a secondary workflow."
           }
           if ($LASTEXITCODE -ne 0) { throw 'Release publish failed' }
 
