@@ -8,10 +8,15 @@ from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .process_utils import set_system_awake
-from .publishing import PLATFORM_LABELS, Platform, PublishJob, PublishQueue
+from .publishing import (
+    PLATFORM_LABELS,
+    Platform,
+    PublishJob,
+    PublishQueue,
+    retry_one_failed_delivery,
+)
 from .publishing_journal import append_publish_log, tail_publish_log
 from .publishing_reliable import publish_platform_reliable
-from .publishing_targets import prune_unselected_targets
 from .publishing_targets_ui import TargetAwareSmartWindow
 
 
@@ -21,10 +26,21 @@ class ReliablePublishWorker(QThread):
     completed = Signal(object, object)
     failed = Signal(str)
 
-    def __init__(self, queue: PublishQueue, job: PublishJob) -> None:
+    def __init__(
+        self,
+        queue: PublishQueue,
+        job: PublishJob,
+        allowed_platforms: set[Platform] | None = None,
+    ) -> None:
         super().__init__()
         self.queue = queue
         self.job = job
+        # A snapshot of the active checkboxes protects the queue from uploading
+        # to a platform that was not selected when this worker was started.
+        # ``None`` keeps the constructor backward compatible for non-UI callers.
+        self.allowed_platforms = (
+            None if allowed_platforms is None else frozenset(allowed_platforms)
+        )
 
     def _log(self, message: str) -> None:
         line = append_publish_log(message)
@@ -39,6 +55,11 @@ class ReliablePublishWorker(QThread):
 
             pending: list[Platform] = []
             for platform in self.job.pending_platforms:
+                if (
+                    self.allowed_platforms is not None
+                    and platform not in self.allowed_platforms
+                ):
+                    continue
                 state = self.job.deliveries.get(platform.value)
                 if state and state.status == "pending":
                     pending.append(platform)
@@ -156,12 +177,21 @@ class ReliablePublishingWindow(TargetAwareSmartWindow):
         return recovered
 
     def _next_runnable_job(self) -> PublishJob | None:
+        selected_names = {
+            platform.value for platform in self.selected_platforms()
+        }
+        if not selected_names:
+            return None
+
         now = time.time()
         candidates: list[PublishJob] = []
         for job in self.publish_queue.jobs:
             if job.due_at > now:
                 continue
-            if any(state.status == "pending" for state in job.deliveries.values()):
+            if any(
+                name in selected_names and state.status == "pending"
+                for name, state in job.deliveries.items()
+            ):
                 candidates.append(job)
         if not candidates:
             return None
@@ -177,13 +207,20 @@ class ReliablePublishingWindow(TargetAwareSmartWindow):
         if self.render_worker and self.render_worker.isRunning():
             return
 
-        self._prune_queue_targets()
+        allowed_platforms = set(self.selected_platforms())
+        if not allowed_platforms:
+            self.refresh_publish_status()
+            return
         job = self._next_runnable_job()
         if job is None:
             self.refresh_publish_status()
             return
 
-        self.publish_worker = ReliablePublishWorker(self.publish_queue, job)
+        self.publish_worker = ReliablePublishWorker(
+            self.publish_queue,
+            job,
+            allowed_platforms,
+        )
         self.publish_worker.progressed.connect(self.on_publish_progress)
         self.publish_worker.logged.connect(self._append_ui_log)
         self.publish_worker.completed.connect(self.publish_done)
@@ -203,8 +240,6 @@ class ReliablePublishingWindow(TargetAwareSmartWindow):
             for name, message in errors.items()
             if name in selected_names
         }
-        self._prune_queue_targets()
-
         if visible_errors:
             parts = []
             for name, message in visible_errors.items():
@@ -243,30 +278,32 @@ class ReliablePublishingWindow(TargetAwareSmartWindow):
         self.refresh_publish_status()
 
     def retry_failed(self) -> None:
-        self._prune_queue_targets()
-        now = time.time()
-        count = 0
-        for job in self.publish_queue.jobs:
-            changed = False
-            for name, state in job.deliveries.items():
-                try:
-                    platform = Platform(name)
-                except ValueError:
-                    continue
-                if platform not in self.selected_platforms():
-                    continue
-                if state.status == "failed":
-                    state.status = "pending"
-                    state.error = ""
-                    state.updated_at = now
-                    changed = True
-            if changed:
-                job.due_at = now
-                count += 1
-        self.publish_queue.save()
-        line = append_publish_log(f"Пользователь вернул в очередь ошибочные задания: {count}")
+        selected = {platform.value for platform in self.selected_platforms()}
+        retried = retry_one_failed_delivery(
+            self.publish_queue,
+            platform_names=selected,
+        )
+        if retried is None:
+            line = append_publish_log(
+                "Пользователь запросил повтор: подходящих ошибок нет."
+            )
+            self._append_ui_log(line)
+            self.status.setText("Нет ошибок для повтора на выбранных платформах")
+            self.refresh_publish_status()
+            return
+
+        job, name = retried
+        try:
+            label = PLATFORM_LABELS[Platform(name)]
+        except ValueError:
+            label = name
+        line = append_publish_log(
+            f"Пользователь повторяет 1 ошибку: {Path(job.video).name} · {label}"
+        )
         self._append_ui_log(line)
-        self.status.setText(f"Повторно поставлено в очередь: {count}")
+        self.status.setText(
+            f"Повторяется 1 ошибка: {Path(job.video).name} · {label}"
+        )
         self.refresh_publish_status()
         self.process_publish_queue()
 

@@ -258,6 +258,87 @@ class PublishQueue:
         return sum(1 for job in self.jobs if job.done)
 
 
+def _overdue_runnable_jobs(
+    jobs: list[PublishJob],
+    *,
+    now: float,
+) -> list[PublishJob]:
+    """Return overdue jobs that still have at least one pending delivery."""
+    return sorted(
+        (
+            job
+            for job in jobs
+            if job.due_at <= now
+            and any(state.status == "pending" for state in job.deliveries.values())
+        ),
+        key=lambda job: (job.due_at, job.created_at, job.id),
+    )
+
+
+def startup_autopause_count(
+    queue: PublishQueue,
+    *,
+    saved_active: bool,
+    now: float | None = None,
+) -> int:
+    """Return the overdue backlog size only when automatic startup is unsafe."""
+    if not saved_active:
+        return 0
+    current = float(time.time() if now is None else now)
+    count = len(_overdue_runnable_jobs(queue.jobs, now=current))
+    return count if count > 1 else 0
+
+
+def spread_overdue_runnable_jobs(
+    queue: PublishQueue,
+    *,
+    interval_minutes: int,
+    now: float | None = None,
+) -> int:
+    """Restore spacing for an overdue backlog before a manual queue start.
+
+    Future jobs are intentionally left untouched. This may interleave an old
+    backlog with an already planned future batch, but it never silently changes
+    a schedule the user has not missed.
+    """
+    current = float(time.time() if now is None else now)
+    overdue = _overdue_runnable_jobs(queue.jobs, now=current)
+    if not overdue:
+        return 0
+
+    interval = max(15, int(interval_minutes)) * 60
+    for index, job in enumerate(overdue):
+        job.due_at = current + index * interval
+    queue.save()
+    return len(overdue)
+
+
+def retry_one_failed_delivery(
+    queue: PublishQueue,
+    *,
+    platform_names: set[str] | None = None,
+    now: float | None = None,
+) -> tuple[PublishJob, str] | None:
+    """Move exactly one failed delivery back to pending and persist it."""
+    current = float(time.time() if now is None else now)
+    allowed = None if platform_names is None else set(platform_names)
+    jobs = sorted(queue.jobs, key=lambda job: (job.due_at, job.created_at, job.id))
+
+    for job in jobs:
+        for name, state in job.deliveries.items():
+            if allowed is not None and name not in allowed:
+                continue
+            if state.status != "failed":
+                continue
+            state.status = "pending"
+            state.error = ""
+            state.updated_at = current
+            job.due_at = current
+            queue.save()
+            return job, name
+    return None
+
+
 def _json_request(
     url: str,
     *,

@@ -4,6 +4,7 @@ import tomllib
 from pathlib import Path
 
 from arara_factory.version import __version__
+from arara_factory import __version__ as package_version
 
 
 def test_version_is_synchronized() -> None:
@@ -12,4 +13,5 @@ def test_version_is_synchronized() -> None:
     installer = (root / "installer" / "arara_factory.iss").read_text(encoding="utf-8")
 
     assert project["project"]["version"] == __version__
+    assert package_version == __version__
     assert f'#define MyAppVersion "{__version__}"' in installer

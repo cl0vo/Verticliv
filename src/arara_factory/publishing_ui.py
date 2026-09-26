@@ -34,6 +34,9 @@ from .publishing import (
     connect_youtube,
     platform_connected,
     publish_platform,
+    retry_one_failed_delivery,
+    spread_overdue_runnable_jobs,
+    startup_autopause_count,
 )
 from .secure_store import load_credentials, update_platform_credentials
 
@@ -282,6 +285,7 @@ class PublishingWindow(IntegratedBatchWindow):
         self.publish_queue = PublishQueue()
         self.publish_worker: PublishWorker | None = None
         self.publish_settings = QSettings("ARARA", "ARARA Factory")
+        self._startup_overdue_pause_count = 0
         super().__init__()
 
         self.publish_frame = QFrame()
@@ -356,7 +360,7 @@ class PublishingWindow(IntegratedBatchWindow):
         self.publish_toggle = QPushButton("ЗАПУСТИТЬ ОЧЕРЕДЬ")
         self.publish_toggle.setObjectName("generate")
         self.publish_toggle.clicked.connect(self.toggle_publish_queue)
-        self.retry_button = QPushButton("Повторить ошибки")
+        self.retry_button = QPushButton("Повторить 1 ошибку")
         self.retry_button.clicked.connect(self.retry_failed)
         actions.addWidget(self.add_ready_button)
         actions.addWidget(self.publish_toggle)
@@ -376,10 +380,26 @@ class PublishingWindow(IntegratedBatchWindow):
         self.publish_timer = QTimer(self)
         self.publish_timer.setInterval(30_000)
         self.publish_timer.timeout.connect(self.process_publish_queue)
-        if self.publish_settings.value("publish_queue_active", False, type=bool):
+        saved_active = self.publish_settings.value(
+            "publish_queue_active", False, type=bool
+        )
+        self._startup_overdue_pause_count = startup_autopause_count(
+            self.publish_queue,
+            saved_active=saved_active,
+        )
+        if self._startup_overdue_pause_count:
+            self.publish_settings.setValue("publish_queue_active", False)
+            self.publish_settings.sync()
+        elif saved_active:
             self.publish_timer.start()
         self.refresh_connections()
         self.refresh_publish_status()
+        if self._startup_overdue_pause_count:
+            self.status.setText(
+                "Автозапуск очереди приостановлен: просрочено "
+                f"{self._startup_overdue_pause_count} заданий. "
+                "Проверь очередь и нажми «Запустить очередь»."
+            )
         QTimer.singleShot(1500, self.process_publish_queue)
 
     def selected_platforms(self) -> list[Platform]:
@@ -453,8 +473,18 @@ class PublishingWindow(IntegratedBatchWindow):
             if not self.selected_platforms():
                 QMessageBox.warning(self, "Нет платформ", "Отметь хотя бы одну платформу.")
                 return
+            spread = spread_overdue_runnable_jobs(
+                self.publish_queue,
+                interval_minutes=int(self.interval.currentData() or 60),
+            )
+            self._startup_overdue_pause_count = 0
             self.publish_timer.start()
             self.publish_settings.setValue("publish_queue_active", True)
+            if spread > 1:
+                self.status.setText(
+                    f"Очередь запущена · {spread} просроченных заданий "
+                    "разнесены по выбранному интервалу"
+                )
             self.process_publish_queue()
         self.publish_settings.sync()
         self.refresh_publish_status()
@@ -501,8 +531,22 @@ class PublishingWindow(IntegratedBatchWindow):
         self.refresh_publish_status()
 
     def retry_failed(self) -> None:
-        count = self.publish_queue.retry_failed_now()
-        self.status.setText(f"Возвращено в очередь: {count}")
+        selected = {platform.value for platform in self.selected_platforms()}
+        retried = retry_one_failed_delivery(
+            self.publish_queue,
+            platform_names=selected,
+        )
+        if retried is None:
+            self.status.setText("Нет ошибок для повтора на выбранных платформах")
+        else:
+            job, name = retried
+            try:
+                label = PLATFORM_LABELS[Platform(name)]
+            except ValueError:
+                label = name
+            self.status.setText(
+                f"Повторяется 1 ошибка: {Path(job.video).name} · {label}"
+            )
         self.refresh_publish_status()
         self.process_publish_queue()
 
@@ -519,6 +563,12 @@ class PublishingWindow(IntegratedBatchWindow):
         self.publish_status.setText(
             f"Осталось {self.publish_queue.remaining} · успешно {self.publish_queue.completed} · {next_text}"
         )
+        if self._startup_overdue_pause_count:
+            self.publish_status.setText(
+                self.publish_status.text()
+                + " · автозапуск на паузе: просрочено "
+                + str(self._startup_overdue_pause_count)
+            )
 
     def render_done(self, files: list[str]) -> None:
         preview = self.last_render_was_preview

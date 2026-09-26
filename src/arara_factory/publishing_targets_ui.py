@@ -6,12 +6,11 @@ from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QCheckBox, QFrame, QGridLayout, QLabel, QVBoxLayout
 
 from .publishing import PLATFORM_LABELS, Platform, PublishJob, platform_connected
-from .publishing_targets import prune_unselected_targets
 from .smart_ui import SmartMainWindow
 
 
 class TargetAwareSmartWindow(SmartMainWindow):
-    """Final publishing UX: visible target checkboxes and target-aware queue."""
+    """Publishing UX with target defaults and a non-destructive active filter."""
 
     def __init__(self) -> None:
         self.schedule_platform_boxes: dict[Platform, QCheckBox] = {}
@@ -20,7 +19,6 @@ class TargetAwareSmartWindow(SmartMainWindow):
         self._install_schedule_targets()
         self._sync_schedule_platforms()
         self._auto_select_single_connected_platform()
-        self._prune_queue_targets()
         self._sync_publish_workflow()
         self.refresh_publish_status()
 
@@ -37,8 +35,9 @@ class TargetAwareSmartWindow(SmartMainWindow):
         title = QLabel("КУДА ПУБЛИКОВАТЬ")
         title.setObjectName("summaryTitle")
         hint = QLabel(
-            "Отметь платформы для этой пачки. Снятая галочка сразу исключает эту платформу "
-            "из незавершённых повторов старой очереди."
+            "Галочки задают платформы для новых пачек и включают их очередь. "
+            "Снятая галочка приостановит публикацию, но сохранит старые задания. "
+            "Верни галочку, чтобы продолжить."
         )
         hint.setObjectName("mutedText")
         hint.setWordWrap(True)
@@ -84,14 +83,12 @@ class TargetAwareSmartWindow(SmartMainWindow):
         primary = self.platform_boxes[platform]
         if primary.isChecked() != checked:
             primary.setChecked(checked)
-        self._prune_queue_targets()
         self._sync_publish_workflow()
 
     def _primary_target_toggled(self, platform: Platform, checked: bool) -> None:
         mirror = self.schedule_platform_boxes.get(platform)
         if mirror is not None and mirror.isChecked() != checked:
             mirror.setChecked(checked)
-        self._prune_queue_targets()
         self._sync_publish_workflow()
 
     def _sync_schedule_platforms(self) -> None:
@@ -121,37 +118,13 @@ class TargetAwareSmartWindow(SmartMainWindow):
                 else "Сначала подключи аккаунт"
             )
 
-    def _prune_queue_targets(self) -> None:
-        if not hasattr(self, "publish_queue"):
-            return
-        if self.publish_worker and self.publish_worker.isRunning():
-            return
-        selected = self.selected_platforms()
-        if not selected:
-            return
-        prune_unselected_targets(self.publish_queue, selected)
-
     def refresh_connections(self) -> None:
         super().refresh_connections()
         if not hasattr(self, "schedule_platform_boxes"):
             return
         self._sync_schedule_platforms()
         self._auto_select_single_connected_platform()
-        self._prune_queue_targets()
         self._sync_publish_workflow()
-
-    def process_publish_queue(self) -> None:
-        if not (self.publish_worker and self.publish_worker.isRunning()):
-            self._prune_queue_targets()
-        super().process_publish_queue()
-
-    def schedule_selected(self) -> None:
-        self._prune_queue_targets()
-        super().schedule_selected()
-
-    def retry_failed(self) -> None:
-        self._prune_queue_targets()
-        super().retry_failed()
 
     def publish_done(self, job: PublishJob, errors: dict[str, str]) -> None:
         self.publish_worker = None
@@ -161,8 +134,6 @@ class TargetAwareSmartWindow(SmartMainWindow):
             for name, message in errors.items()
             if name in selected_names
         }
-
-        self._prune_queue_targets()
 
         if visible_errors:
             labels = [PLATFORM_LABELS[Platform(name)] for name in visible_errors]

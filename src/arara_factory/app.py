@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 from .brainrot_index import build_index, get_index_info, reset_usage
 from .preview import PreviewPanel
 from .render import (
+    DEFAULT_BANNER_PATH,
     MAX_REEL_SECONDS,
     MIN_REEL_SECONDS,
     RenderOptions,
@@ -153,6 +154,40 @@ class FolderPicker(QWidget):
     def choose(self) -> None:
         start = self.path or str(Path.home() / "Videos")
         value = QFileDialog.getExistingDirectory(self, "Куда сохранять готовые ролики", start)
+        if value:
+            self.line.setText(value)
+
+
+class VideoFilePicker(QWidget):
+    changed = Signal(str)
+
+    def __init__(self, value: str):
+        super().__init__()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        self.line = QLineEdit(value)
+        self.line.setReadOnly(True)
+        self.line.setPlaceholderText('Прозрачный анимированный WebM')
+        self.line.textChanged.connect(self.changed.emit)
+        self.button = QPushButton('Выбрать')
+        self.button.setMaximumWidth(95)
+        self.button.clicked.connect(self.choose)
+        layout.addWidget(self.line, 1)
+        layout.addWidget(self.button)
+
+    @property
+    def path(self) -> str:
+        return self.line.text().strip()
+
+    def choose(self) -> None:
+        start = str(Path(self.path).parent) if self.path else str(Path.home() / 'Videos')
+        value = QFileDialog.getOpenFileName(
+            self,
+            'Выбрать прозрачный анимированный баннер',
+            start,
+            'Прозрачный баннер (*.webm *.mov);;Видео (*.webm *.mov *.mkv *.mp4)',
+        )[0]
         if value:
             self.line.setText(value)
 
@@ -396,6 +431,31 @@ class MainWindow(QMainWindow):
         default_output = Path.home() / "Videos" / "ARARA Factory" / "renders"
         self.output_picker = FolderPicker(str(self.settings.value("output", str(default_output))))
 
+        saved_banner = str(self.settings.value('banner_path', str(DEFAULT_BANNER_PATH)))
+        self.banner_enabled = QCheckBox('Добавлять анимированный баннер arara777 сверху')
+        self.banner_enabled.setChecked(
+            self.settings.value(
+                'banner_enabled',
+                Path(saved_banner).is_file(),
+                type=bool,
+            )
+        )
+        self.banner_picker = VideoFilePicker(saved_banner)
+
+        self.banner_width = QSpinBox()
+        self.banner_width.setRange(50, 100)
+        self.banner_width.setValue(int(self.settings.value('banner_width_percent', 100)))
+        self.banner_width.setSuffix('%')
+        self.banner_width.setMaximumWidth(120)
+
+        self.banner_top = QDoubleSpinBox()
+        self.banner_top.setRange(0.0, 20.0)
+        self.banner_top.setSingleStep(0.5)
+        self.banner_top.setDecimals(1)
+        self.banner_top.setValue(float(self.settings.value('banner_top_percent', 2.5)))
+        self.banner_top.setSuffix('% высоты')
+        self.banner_top.setMaximumWidth(150)
+
         self.zoom = QDoubleSpinBox()
         self.zoom.setRange(1.0, 1.5)
         self.zoom.setSingleStep(0.05)
@@ -431,6 +491,10 @@ class MainWindow(QMainWindow):
         self.auto_open.setChecked(self.settings.value("auto_open", True, type=bool))
 
         settings_layout.addRow("Куда сохранять", self.output_picker)
+        settings_layout.addRow('', self.banner_enabled)
+        settings_layout.addRow('Файл баннера', self.banner_picker)
+        settings_layout.addRow('Ширина баннера', self.banner_width)
+        settings_layout.addRow('Отступ сверху', self.banner_top)
         settings_layout.addRow("Приближение машины", self.zoom)
         settings_layout.addRow("Высота субтитров", self.subtitle_y)
         settings_layout.addRow("", self.subtitles_enabled)
@@ -461,12 +525,17 @@ class MainWindow(QMainWindow):
         main.addStretch(1)
 
         self.output_picker.changed.connect(self.save_preferences)
+        self.banner_enabled.toggled.connect(self.banner_controls_changed)
+        self.banner_picker.changed.connect(self.save_preferences)
+        self.banner_width.valueChanged.connect(self.save_preferences)
+        self.banner_top.valueChanged.connect(self.save_preferences)
         self.zoom.valueChanged.connect(self.zoom_changed)
         self.subtitle_y.valueChanged.connect(self.save_preferences)
         self.subtitles_enabled.toggled.connect(self.save_preferences)
         self.encoder.currentIndexChanged.connect(self.save_preferences)
         self.quality.valueChanged.connect(self.save_preferences)
         self.auto_open.toggled.connect(self.save_preferences)
+        self.sync_banner_controls()
 
         self.inspect_brainrot()
         self.refresh_ready_state()
@@ -594,9 +663,23 @@ class MainWindow(QMainWindow):
         self.save_preferences()
         self.inspect_brainrot()
 
+    def banner_controls_changed(self, *args) -> None:
+        self.sync_banner_controls()
+        self.save_preferences()
+
+    def sync_banner_controls(self) -> None:
+        enabled = self.banner_enabled.isChecked()
+        self.banner_picker.setEnabled(enabled)
+        self.banner_width.setEnabled(enabled)
+        self.banner_top.setEnabled(enabled)
+
     def save_preferences(self, *args) -> None:
         self.settings.setValue("brainrot", self.brainrot_card.path)
         self.settings.setValue("output", self.output_picker.path)
+        self.settings.setValue('banner_enabled', self.banner_enabled.isChecked())
+        self.settings.setValue('banner_path', self.banner_picker.path)
+        self.settings.setValue('banner_width_percent', self.banner_width.value())
+        self.settings.setValue('banner_top_percent', self.banner_top.value())
         self.settings.setValue("zoom", self.zoom.value())
         self.settings.setValue("subtitle_y", self.subtitle_y.value())
         self.settings.setValue("subtitles_enabled", self.subtitles_enabled.isChecked())
@@ -670,6 +753,10 @@ class MainWindow(QMainWindow):
             preview_seconds=5.0 if preview else None,
             brainrot_zoom=self.zoom.value(),
             subtitles_enabled=self.subtitles_enabled.isChecked(),
+            banner_enabled=self.banner_enabled.isChecked(),
+            banner_path=self.banner_picker.path,
+            banner_width_percent=self.banner_width.value(),
+            banner_top_percent=self.banner_top.value(),
         )
 
         self.preview_panel.player.pause()

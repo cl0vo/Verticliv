@@ -1,4 +1,11 @@
 .venv/
+artifacts/
+backups/
+build/
+dist/
+installer-output/
+.pytest_cache/
+*.spec
 __pycache__/
 *.pyc
 .env

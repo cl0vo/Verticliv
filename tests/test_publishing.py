@@ -7,6 +7,9 @@ from arara_factory.publishing import (
     PublishQueue,
     publish_instagram,
     publish_tiktok,
+    retry_one_failed_delivery,
+    spread_overdue_runnable_jobs,
+    startup_autopause_count,
 )
 from arara_factory.publishing_targets import prune_unselected_targets
 
@@ -104,6 +107,116 @@ def test_retry_failed_keeps_successful_deliveries(tmp_path: Path) -> None:
     assert queue.retry_failed_now() == 1
     assert job.deliveries[Platform.TIKTOK.value].status == "pending"
     assert job.deliveries[Platform.YOUTUBE.value].status == "success"
+
+
+def test_startup_autopause_requires_multiple_overdue_pending_jobs(
+    tmp_path: Path,
+) -> None:
+    queue = PublishQueue(tmp_path / "queue.json")
+    first = _video(tmp_path, "one.mp4")
+    second = _video(tmp_path, "two.mp4")
+    queue.enqueue(
+        [first, second],
+        [Platform.YOUTUBE],
+        "ARARA",
+        15,
+        start_at=1_000.0,
+    )
+
+    assert startup_autopause_count(queue, saved_active=True, now=2_000.0) == 2
+    assert startup_autopause_count(queue, saved_active=False, now=2_000.0) == 0
+
+    queue.update_delivery(
+        queue.jobs[0],
+        Platform.YOUTUBE,
+        status="failed",
+        error="network",
+    )
+    assert startup_autopause_count(queue, saved_active=True, now=2_000.0) == 0
+
+
+def test_manual_start_spreads_only_overdue_runnable_jobs_and_keeps_future_due(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "queue.json"
+    queue = PublishQueue(path)
+    files = [_video(tmp_path, f"{index}.mp4") for index in range(4)]
+    jobs = queue.enqueue(
+        files,
+        [Platform.YOUTUBE],
+        "ARARA",
+        15,
+        start_at=1_000.0,
+    )
+    # Due times are 1000, 1900, 2800 and 3700. A failed delivery is not
+    # runnable and a future delivery must not be moved.
+    queue.update_delivery(
+        jobs[1],
+        Platform.YOUTUBE,
+        status="failed",
+        error="network",
+    )
+
+    assert spread_overdue_runnable_jobs(
+        queue,
+        interval_minutes=30,
+        now=3_000.0,
+    ) == 2
+    assert [job.due_at for job in jobs] == [3_000.0, 1_900.0, 4_800.0, 3_700.0]
+
+    restored = PublishQueue(path)
+    assert [job.due_at for job in restored.jobs] == [
+        3_000.0,
+        1_900.0,
+        4_800.0,
+        3_700.0,
+    ]
+
+
+def test_retry_button_moves_exactly_one_selected_delivery_to_pending(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "queue.json"
+    queue = PublishQueue(path)
+    first = queue.enqueue(
+        [_video(tmp_path, "one.mp4")],
+        [Platform.TIKTOK, Platform.YOUTUBE],
+        "ARARA",
+        15,
+        start_at=1_000.0,
+    )[0]
+    second = queue.enqueue(
+        [_video(tmp_path, "two.mp4")],
+        [Platform.YOUTUBE],
+        "ARARA",
+        15,
+        start_at=2_000.0,
+    )[0]
+    queue.update_delivery(first, Platform.TIKTOK, status="failed", error="tiktok")
+    queue.update_delivery(first, Platform.YOUTUBE, status="failed", error="youtube-1")
+    queue.update_delivery(second, Platform.YOUTUBE, status="failed", error="youtube-2")
+
+    retried = retry_one_failed_delivery(
+        queue,
+        platform_names={Platform.YOUTUBE.value},
+        now=5_000.0,
+    )
+
+    assert retried == (first, Platform.YOUTUBE.value)
+    assert first.due_at == 5_000.0
+    assert first.deliveries[Platform.YOUTUBE.value].status == "pending"
+    assert first.deliveries[Platform.YOUTUBE.value].error == ""
+    assert first.deliveries[Platform.TIKTOK.value].status == "failed"
+    assert second.deliveries[Platform.YOUTUBE.value].status == "failed"
+    assert sum(
+        state.status == "pending"
+        for job in queue.jobs
+        for state in job.deliveries.values()
+    ) == 1
+
+    restored = PublishQueue(path)
+    assert restored.jobs[0].deliveries[Platform.YOUTUBE.value].status == "pending"
+    assert restored.jobs[1].deliveries[Platform.YOUTUBE.value].status == "failed"
 
 
 def test_youtube_only_selection_prunes_old_tiktok_and_instagram_retries(tmp_path: Path) -> None:

@@ -573,7 +573,7 @@ class SmartMainWindow(PublishingLibraryWindow):
         queue_head.addStretch(1)
         self.publish_toggle.setMinimumWidth(165)
         self.publish_toggle.setMaximumWidth(200)
-        self.retry_button.setText("Повторить ошибки")
+        self.retry_button.setText("Повторить 1 ошибку")
         self.retry_button.setMaximumWidth(150)
         queue_head.addWidget(self.publish_toggle)
         queue_head.addWidget(self.retry_button)

@@ -51,10 +51,13 @@ jobs:
           import PySide6.QtMultimedia
           import PySide6.QtMultimediaWidgets
           import google.oauth2.credentials
+          import google.auth.exceptions
           import google_auth_oauthlib.flow
           import googleapiclient.discovery
           import googleapiclient.http
           import httplib2
+          import requests
+          from google.auth.transport.requests import AuthorizedSession
 
           import arara_factory.entry
           import arara_factory.publishing
@@ -246,7 +249,9 @@ jobs:
             '--hidden-import', 'arara_factory.smart_ui',
             '--hidden-import', 'arara_factory.social_oauth',
             '--hidden-import', 'google.auth.transport.requests',
+            '--hidden-import', 'google.auth.exceptions',
             '--hidden-import', 'google.oauth2.credentials',
+            '--hidden-import', 'requests',
             '--hidden-import', 'googleapiclient.discovery',
             '--hidden-import', 'googleapiclient.errors',
             '--hidden-import', 'googleapiclient.http',
@@ -315,7 +320,7 @@ jobs:
           if ($exists) {
             gh release upload $tag $asset --repo $repo --clobber
           } else {
-            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "Reliable publishing: persistent technical journal, explicit YouTube HTTP timeout and retries, exact platform errors, failed-item isolation so the queue continues, target-aware posting, and a simple Yes/No close confirmation that saves queue/settings before exit."
+            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "Personal ARARA workflow update: reliable resumable YouTube uploads, safe paused/interval-spaced backlogs, single-item retry, validated vertical renders, and a configurable looping alpha banner."
           }
           if ($LASTEXITCODE -ne 0) { throw 'Release publish failed' }
 
