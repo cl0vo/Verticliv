@@ -4,7 +4,7 @@ import copy
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal, QRectF, QUrl
-from PySide6.QtGui import QColor, QPainter, QPen, QImage, QDesktopServices
+from PySide6.QtGui import QColor, QPainter, QPen, QImage, QDesktopServices, QFont, QFontMetricsF, QPainterPath
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -17,10 +17,13 @@ from PySide6.QtWidgets import (
 from .studio_engine import (
     StudioProject, Crop, fitted_crop, transcribe,
     export_video, find_highlights, source_info, gaming_panels,
+    natural_webcam_fraction, gaming_caption_y,
 )
 from .transcribe import RecognizedWord
 from .auto_reels_ui import AutoReelsPanel
 from .version import __version__
+from .caption_styles import (CAPTION_STYLES, caption_groups, caption_lines, caption_size,
+                             display_word, active_word)
 
 
 class Task(QThread):
@@ -76,6 +79,15 @@ class SourceCanvas(QWidget):
             p.setPen(QPen(QColor(color), 2))
             p.drawRect(rect)
             p.drawText(rect.adjusted(6, 6, -6, -6), Qt.AlignmentFlag.AlignTop, 'ВЕБКА' if name == 'webcam' else 'ОСНОВНОЙ КАДР / ИГРА')
+            if self.project.layout == 'gaming':
+                cam_h, _, game_h = gaming_panels(self.project)
+                x, y, w, h = fitted_crop(crop, self.frame.width(), self.frame.height(),
+                                         1080 / (cam_h if name == 'webcam' else game_h))
+                visible = QRectF(area.x()+x/self.frame.width()*area.width(),
+                                 area.y()+y/self.frame.height()*area.height(),
+                                 w/self.frame.width()*area.width(), h/self.frame.height()*area.height())
+                p.setPen(QPen(QColor(color), 2, Qt.PenStyle.DashLine))
+                p.drawRect(visible)
         if self.draft:
             p.setPen(QPen(QColor('#ffffff'), 2, Qt.PenStyle.DashLine))
             p.drawRect(self.draft)
@@ -153,17 +165,37 @@ class OutputCanvas(QWidget):
         p.translate((self.width()-1080*scale)/2, (self.height()-1920*scale)/2)
         p.scale(scale, scale)
         if project.captions:
-            from .subtitles import group_words
-            for group in group_words(project.words, max_words=4, max_chars=32):
-                if group.start <= self.position <= group.end:
-                    font = p.font()
-                    font.setPixelSize(project.font_size)
-                    font.setBold(True)
+            for group in caption_groups(project.words, project.caption_style):
+                if group.start <= self.position < group.end:
+                    style = CAPTION_STYLES[project.caption_style]
+                    active = active_word(group, self.position) if style.highlight else -1
+                    font = QFont(style.font)
+                    font.setPixelSize(caption_size(group, project.caption_style, project.font_size))
+                    font.setWeight(QFont.Weight.Black if style.uppercase else QFont.Weight.Bold)
                     p.setFont(font)
-                    area = QRectF(70,project.caption_y-160,940,160)
-                    p.fillRect(area,QColor(0,0,0,145))
-                    p.setPen(QColor('white'))
-                    p.drawText(area,Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom | Qt.TextFlag.TextWordWrap,' '.join(w.text for w in group.words))
+                    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    if style.pop and active >= 0:
+                        factor = 1 + .08 * max(0, 1-(self.position-group.words[active].start)/.09)
+                        p.translate(540, project.caption_y)
+                        p.scale(factor, factor)
+                        p.translate(-540, -project.caption_y)
+                    metrics = QFontMetricsF(font)
+                    lines = caption_lines(group, project.caption_style)
+                    baseline = project.caption_y - metrics.descent() - (len(lines)-1)*metrics.height()
+                    for line in lines:
+                        texts = [display_word(group.words[i].text, style) for i in line]
+                        space = metrics.horizontalAdvance(' ')
+                        width = sum(metrics.horizontalAdvance(t) for t in texts) + space*(len(texts)-1)
+                        x = (1080-width)/2
+                        for i, text in zip(line, texts):
+                            path = QPainterPath()
+                            path.addText(x, baseline, font, text)
+                            p.setPen(QPen(QColor('#101010'), style.outline*2,
+                                          Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+                            p.setBrush(QColor(style.accent if i == active else '#ffffff'))
+                            p.drawPath(path)
+                            x += metrics.horizontalAdvance(text) + space
+                        baseline += metrics.height()
                     break
 
 
@@ -288,8 +320,8 @@ class StudioWindow(QMainWindow):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.layout_mode = QComboBox()
         for label, value in [('Весь кадр + размытие','fit'),('Заполнить 9:16','fill'),
-                             ('Вебка + игра · без обрезки областей','gaming_fit'),
-                             ('Вебка + игра · заполнение с обрезкой','gaming')]:
+                             ('Вебка + игра · до краёв, без полей','gaming'),
+                             ('Вебка + игра · целиком, с полями','gaming_fit')]:
             self.layout_mode.addItem(label,value)
         form.addRow('Компоновка',self.layout_mode)
         self.cam_size = QSpinBox()
@@ -297,6 +329,14 @@ class StudioWindow(QMainWindow):
         self.cam_size.setValue(28)
         self.cam_size.setSuffix('%')
         form.addRow('Высота вебки',self.cam_size)
+        self.natural_cam_button = QPushButton('Высота по пропорциям вебки')
+        self.natural_cam_button.clicked.connect(self.fit_webcam_height)
+        form.addRow(self.natural_cam_button)
+        split_hint = QLabel('Сплошная рамка — выделенная область, пунктир — то, что попадёт в ролик. '
+                            'Без полей: края обрезаются, пропорции сохраняются. '
+                            'При выделении вебки её высота подбирается автоматически (15–50%).')
+        split_hint.setWordWrap(True)
+        form.addRow(split_hint)
         self.captions_enabled = QCheckBox('Добавить субтитры')
         self.captions_enabled.setChecked(True)
         form.addRow(self.captions_enabled)
@@ -322,12 +362,12 @@ class StudioWindow(QMainWindow):
         dota.clicked.connect(lambda:self.vocabulary.setText('Дота 2, Рошан, Аегис, БКБ, ульт, байбек, керри, саппорт, мид, инвокер, пудж, рампага, Black King Bar.'))
         form.addRow(dota)
         self.style = QComboBox()
-        self.style.addItem('Подсветка слов','karaoke')
-        self.style.addItem('Обычные фразы','plain')
+        for key, preset in CAPTION_STYLES.items():
+            self.style.addItem(preset.label, key)
         form.addRow('Стиль',self.style)
         self.font_size = QSpinBox()
         self.font_size.setRange(24,100)
-        self.font_size.setValue(64)
+        self.font_size.setValue(76)
         form.addRow('Размер текста',self.font_size)
         self.caption_y = QSpinBox()
         self.caption_y.setRange(200,1750)
@@ -415,12 +455,12 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
             info = source_info(name)
             template = self.auto_reels_panel.gaming_template or {}
             reuse = abs(template.get('source_aspect', 0) - info.width/info.height) < .02
-            candidate = StudioProject(source=name, end=min(60, info.duration), layout='gaming_fit',
+            candidate = StudioProject(source=name, end=min(60, info.duration), layout='gaming',
                                       webcam_fraction=template.get('webcam_fraction', .32) if reuse else .32)
             if reuse:
                 candidate.main = Crop(*template['game_crop'])
                 candidate.webcam = Crop(*template['webcam_crop'])
-            candidate.caption_y = gaming_panels(candidate)[0] + 130
+            candidate.caption_y = gaming_caption_y(candidate)
             self.open_video(name, candidate)
             self.batch_layout_regions = {'main', 'webcam'} if reuse else set()
             self.workspaces.setCurrentIndex(1)
@@ -479,12 +519,12 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
         p.model,p.language,p.device = self.model.currentData(),self.language.currentData(),self.device.currentData()
         p.caption_style,p.font_size,p.caption_y = self.style.currentData(),self.font_size.value(),self.caption_y.value()
         p.vocabulary,p.zoom_at = self.vocabulary.text(),self.zoom_at.value()
-        if p.layout == 'gaming_fit':
-            p.caption_y = gaming_panels(p)[0] + 130
+        if p.layout in ('gaming', 'gaming_fit'):
+            p.caption_y = gaming_caption_y(p)
             self.caption_y.blockSignals(True)
             self.caption_y.setValue(p.caption_y)
             self.caption_y.blockSignals(False)
-        self.caption_y.setEnabled(p.layout != 'gaming_fit')
+        self.caption_y.setEnabled(p.layout not in ('gaming', 'gaming_fit'))
         self.source_canvas.project = self.output_canvas.project = p
         self.source_canvas.update()
         self.output_canvas.update()
@@ -570,12 +610,20 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
     def change_region(self):
         self.source_canvas.mode = self.region.currentData()
         if self.source_canvas.mode == 'webcam' and self.layout_mode.currentData() not in ('gaming', 'gaming_fit'):
-            self.layout_mode.setCurrentIndex(self.layout_mode.findData('gaming_fit'))
+            self.layout_mode.setCurrentIndex(self.layout_mode.findData('gaming'))
 
     def set_crop(self,name,crop):
         self.batch_layout_regions.add(name)
         setattr(self.project,name,crop)
+        if name == 'webcam' and self.project.layout == 'gaming':
+            self.fit_webcam_height()
         self.sync()
+
+    def fit_webcam_height(self):
+        if self.info:
+            self.cam_size.setValue(round(natural_webcam_fraction(
+                self.project.webcam, self.info.width, self.info.height) * 100))
+            self.sync()
 
     def reset_crop(self):
         self.set_crop(self.region.currentData(),Crop())

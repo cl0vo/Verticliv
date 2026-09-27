@@ -12,10 +12,11 @@ from typing import Callable
 
 from .studio_engine import (
     Cancelled, Crop, Highlight, StudioProject, check_cancel, export_video,
-    find_highlights, source_info, transcribe,
+    find_highlights, source_info, transcribe, gaming_caption_y,
 )
 from .speech_selection import cached_transcript, speech_highlights, words_in_window
 from .reels_review import write_review
+from .caption_styles import CAPTION_STYLES
 
 
 @dataclass(frozen=True)
@@ -36,8 +37,11 @@ class AutoReelsOptions:
     webcam_crop: tuple | None = None
     webcam_fraction: float = .32
     source_aspect: float = 0
+    caption_style: str = 'reels_lime'
 
     def validate(self) -> None:
+        if self.caption_style not in CAPTION_STYLES:
+            raise ValueError('Выбери шаблон субтитров.')
         if self.selection not in ('reactions', 'speech'):
             raise ValueError('Выбери отбор по речи или звуковым реакциям.')
         if not isinstance(self.vocabulary, str) or len(self.vocabulary) > 2000:
@@ -231,13 +235,13 @@ def run_auto_reels(
                     language=options.language, device=options.device,
                     zoom=options.zoom, zoom_at=highlight.peak,
                     vocabulary=options.vocabulary,
+                    caption_style=options.caption_style,
                 )
                 if layout in ('gaming', 'gaming_fit'):
                     project.main = Crop(*options.game_crop)
                     project.webcam = Crop(*options.webcam_crop)
                     project.webcam_fraction = options.webcam_fraction
-                    if layout == 'gaming_fit':
-                        project.caption_y = int(1920 * options.webcam_fraction) // 2 * 2 + 130
+                    project.caption_y = gaming_caption_y(project)
                 if not info.has_audio:
                     # No recognition is possible anywhere in this source. Keep
                     # an editable empty caption track without retrying Whisper

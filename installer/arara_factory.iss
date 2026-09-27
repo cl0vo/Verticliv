@@ -1,5 +1,5 @@
 #define MyAppName "Verticliv"
-#define MyAppVersion "0.20.0"
+#define MyAppVersion "0.20.1"
 #define MyAppPublisher "Verticliv"
 #define MyAppExeName "Verticliv.exe"
 

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from .auto_reels import AutoReelsOptions, run_auto_reels
 from .twitch_import_ui import TwitchImportDialog
+from .caption_styles import CAPTION_STYLES
 
 
 VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.ts',
@@ -105,8 +106,8 @@ class AutoReelsPanel(QWidget):
         self.count.setValue(int(self.setting('count', 3)))
         form.addRow('До клипов с исходника', self.count)
         self.layout_mode = self.combo([
-            ('Вебка сверху + игра отдельно', 'gaming_fit'),
-            ('Вебка + игра · заполнение с обрезкой', 'gaming'),
+            ('Вебка + игра · до краёв, без полей', 'gaming'),
+            ('Вебка + игра · целиком, с полями', 'gaming_fit'),
             ('Авто · сохранить содержимое', 'auto'),
             ('Весь кадр + размытый фон', 'fit'),
             ('Заполнить 9:16 · обрезать края', 'fill'),
@@ -115,13 +116,17 @@ class AutoReelsPanel(QWidget):
         self.configure_layout_button = QPushButton('Настроить области игры и вебки')
         self.configure_layout_button.clicked.connect(self.configure_gaming)
         form.addRow(self.configure_layout_button)
-        layout_note = QLabel('Для игровых записей выдели две области один раз. Шаблон применяется '
-                            'к записям с таким же расположением игры и камеры.')
+        layout_note = QLabel('Вебка сверху, игра снизу — вплотную, без растягивания. '
+                            'Для заполнения блоков края обрезаются. Выдели две области один раз '
+                            'и проверь результат: шаблон подходит для записей с той же сценой.')
         layout_note.setWordWrap(True)
         form.addRow(layout_note)
         self.captions = QCheckBox('Субтитры с подсветкой слов + SRT')
         self.captions.setChecked(self.setting('captions', True, bool))
         form.addRow(self.captions)
+        self.caption_style = self.combo([(v.label, k) for k, v in CAPTION_STYLES.items()],
+                                       'caption_style', 'reels_lime')
+        form.addRow('Шаблон субтитров', self.caption_style)
         self.model = self.combo([
             ('Small · основной', 'small'), ('Tiny · быстрый черновик', 'tiny'),
             ('Medium · медленнее, точнее', 'medium'),
@@ -250,7 +255,7 @@ class AutoReelsPanel(QWidget):
         if profile == 'custom':
             return
         self.selection.setCurrentIndex(self.selection.findData('reactions' if profile == 'hearthstone' else 'speech'))
-        self.layout_mode.setCurrentIndex(self.layout_mode.findData('gaming_fit' if profile == 'hearthstone' else 'fit'))
+        self.layout_mode.setCurrentIndex(self.layout_mode.findData('gaming' if profile == 'hearthstone' else 'fit'))
         self.clip_length.setValue(45 if profile in ('hearthstone', 'screen') else 30)
         self.captions.setChecked(True)
         self.zoom.setChecked(False)
@@ -339,6 +344,7 @@ class AutoReelsPanel(QWidget):
         options = AutoReelsOptions(
             clip_length=self.clip_length.value(), count=self.count.value(),
             captions=self.captions.isChecked(), model=self.model.currentData(),
+            caption_style=self.caption_style.currentData(),
             language=self.language.currentData(), layout=self.layout_mode.currentData(),
             zoom=self.zoom.isChecked(), device='cpu',
             selection=self.selection.currentData(), vocabulary=self.vocabulary.text().strip(),
@@ -353,6 +359,7 @@ class AutoReelsPanel(QWidget):
             return
         for key, value in {'clip_length': options.clip_length, 'count': options.count,
                            'captions': options.captions, 'model': options.model,
+                           'caption_style': options.caption_style,
                            'language': options.language, 'layout': options.layout,
                            'zoom': options.zoom, 'output': self.output.text().strip(),
                            'selection': options.selection, 'vocabulary': options.vocabulary,

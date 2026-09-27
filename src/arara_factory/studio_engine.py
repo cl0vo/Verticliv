@@ -15,6 +15,8 @@ from .process_utils import popen_hidden, run_hidden, keep_system_awake
 from .render import RenderOptions, _binary, _video_encoder_args, probe_media
 from .subtitles import ass_time, _ass_escape, group_words
 from .transcribe import RecognizedWord
+from .caption_styles import (CAPTION_STYLES, caption_groups, caption_lines, caption_size,
+                             caption_intervals, display_word, ass_color)
 
 
 class Cancelled(RuntimeError):
@@ -65,9 +67,9 @@ class StudioProject:
     webcam: Crop = field(default_factory=lambda: Crop(0, 0, .25, .3))
     webcam_fraction: float = .28
     captions: bool = True
-    caption_style: str = 'karaoke'
+    caption_style: str = 'reels_lime'
     caption_y: int = 1500
-    font_size: int = 64
+    font_size: int = 76
     model: str = 'small'
     language: str = 'ru'
     device: str = 'cpu'
@@ -84,6 +86,8 @@ class StudioProject:
             raise ValueError('Неизвестная компоновка')
         if self.encoder_mode not in ('auto', 'cpu', 'nvenc'):
             raise ValueError('Неизвестный видеокодер')
+        if self.caption_style not in CAPTION_STYLES:
+            raise ValueError('Неизвестный шаблон субтитров')
         if not all(math.isfinite(x) for x in (self.start, self.end, self.webcam_fraction, self.zoom_at, self.zoom_duration)):
             raise ValueError('Некорректное время')
         if not 0 <= self.start < self.end <= duration + .05:
@@ -226,7 +230,8 @@ def clip_words(project):
 
 
 def write_captions(project, ass_path, srt_path):
-    groups = group_words(clip_words(project), max_words=4, max_chars=32)
+    style = CAPTION_STYLES[project.caption_style]
+    groups = caption_groups(clip_words(project), project.caption_style)
     header = f'''[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -235,7 +240,7 @@ WrapStyle: 0
 ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Base,Arial,{project.font_size},&H00FFFFFF,&H00FFFFFF,&H00101010,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,2,70,70,240,1
+Style: Base,{style.font},{project.font_size},&H00FFFFFF,&H00FFFFFF,&H00101010,&H80000000,-1,0,0,0,100,100,0,0,1,{style.outline},{style.shadow},2,70,70,240,1
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 '''
@@ -248,12 +253,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         return f'{h:02}:{m:02}:{s:02},{ms:03}'
     for i, group in enumerate(groups):
         srt.append(f'{i+1}\n{stamp(group.start)} --> {stamp(group.end)}\n' + ' '.join(w.text for w in group.words) + '\n')
-        intervals = [(group.start, group.end, -1)]
-        if project.caption_style == 'karaoke':
-            intervals = [(w.start, group.words[j+1].start if j+1 < len(group.words) else w.end, j) for j, w in enumerate(group.words)]
-        for start, end, active in intervals:
-            text = ' '.join((r'{\c&H0063F5B0&}' if j == active else r'{\c&H00FFFFFF&}') + _ass_escape(w.text.replace('\n', ' ')) for j, w in enumerate(group.words))
-            tags = rf'{{\an2\pos(540,{project.caption_y})}}'
+        for start, end, active in caption_intervals(group, style):
+            lines = []
+            for line in caption_lines(group, project.caption_style):
+                parts = []
+                for j in line:
+                    color = ass_color(style.accent) if j == active else '&H00FFFFFF&'
+                    parts.append(r'{\c' + color + '}' + _ass_escape(display_word(group.words[j].text, style)))
+                lines.append(' '.join(parts))
+            text = r'\N'.join(lines)
+            size = caption_size(group, project.caption_style, project.font_size)
+            animation = r'\fscx108\fscy108\t(0,90,\fscx100\fscy100)' if style.pop and active >= 0 else ''
+            tags = rf'{{\an2\pos(540,{project.caption_y})\fs{size}{animation}}}'
             events.append(f'Dialogue: 0,{ass_time(start)},{ass_time(end)},Base,,0,0,0,,{tags}{text}')
     ass_path.write_text(header + '\n'.join(events), encoding='utf-8-sig')
     srt_path.write_text('\n'.join(srt), encoding='utf-8-sig')
@@ -261,9 +272,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 def gaming_panels(project):
     cam_h = int(1920 * project.webcam_fraction) // 2 * 2
-    # Dedicated caption band separates camera and gameplay.
-    gap = 180
+    # Edge-to-edge is the primary layout; only the optional contain mode pads.
+    gap = 180 if project.layout == 'gaming_fit' else 0
     return cam_h, gap, 1920 - cam_h - gap
+
+
+def natural_webcam_fraction(crop, width, height):
+    """Full-width camera at its native aspect, bounded to leave room for gameplay."""
+    _, _, w, h = crop.pixels(width, height)
+    return round(max(.15, min(.5, (1080 * h / w) / 1920)), 2)
+
+
+def gaming_caption_y(project):
+    cam_h, gap, _ = gaming_panels(project)
+    # No empty strip in cover mode: text overlays the lower part of the camera.
+    return cam_h + 130 if gap else max(200, cam_h - 28)
 
 
 def layout_graph(project, width, height):

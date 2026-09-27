@@ -158,7 +158,7 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH = "$pwd;$env:PATH"
-          pytest -q tests/test_studio.py tests/test_auto_reels.py
+          pytest -q tests/test_studio.py tests/test_auto_reels.py tests/test_gaming_layout.py tests/test_caption_styles.py
           if ($LASTEXITCODE -ne 0) { throw 'Media regression tests failed' }
 
       - name: Smoke-test real render and queue migration
