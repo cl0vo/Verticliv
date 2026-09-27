@@ -162,7 +162,7 @@ def test_export_quality_gate_preserves_existing_output(tmp_path, monkeypatch, au
 
 
 @pytest.mark.skipif(not shutil.which('ffmpeg') or not shutil.which('ffprobe'),reason='FFmpeg required')
-@pytest.mark.parametrize('layout,zoom,audio',[('fit',False,False),('fill',True,True),('gaming',True,True)])
+@pytest.mark.parametrize('layout,zoom,audio',[('fit',False,False),('fill',True,True),('gaming',True,True),('gaming_fit',False,True)])
 def test_real_export_layout_audio_captions_and_duration(tmp_path,layout,zoom,audio):
     source=tmp_path/'source.mp4'
     cmd=['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=640x360:rate=30']

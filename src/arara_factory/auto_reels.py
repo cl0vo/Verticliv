@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from .studio_engine import (
-    Cancelled, Highlight, StudioProject, check_cancel, export_video,
+    Cancelled, Crop, Highlight, StudioProject, check_cancel, export_video,
     find_highlights, source_info, transcribe,
 )
 from .speech_selection import cached_transcript, speech_highlights, words_in_window
@@ -32,6 +32,10 @@ class AutoReelsOptions:
     vocabulary: str = ''
     skip_start: int = 0
     skip_end: int = 0
+    game_crop: tuple | None = None
+    webcam_crop: tuple | None = None
+    webcam_fraction: float = .32
+    source_aspect: float = 0
 
     def validate(self) -> None:
         if self.selection not in ('reactions', 'speech'):
@@ -45,8 +49,20 @@ class AutoReelsOptions:
             raise ValueError('Длина клипа должна быть от 10 до 180 секунд.')
         if not isinstance(self.count, int) or isinstance(self.count, bool) or not 1 <= self.count <= 12:
             raise ValueError('Количество клипов должно быть от 1 до 12 на исходник.')
-        if self.layout not in ('auto', 'fit', 'fill'):
+        if self.layout not in ('auto', 'fit', 'fill', 'gaming', 'gaming_fit'):
             raise ValueError('Выбери компоновку: авто, весь кадр или заполнить 9:16.')
+        if self.layout in ('gaming', 'gaming_fit'):
+            try:
+                if self.game_crop is None or self.webcam_crop is None:
+                    raise ValueError('missing')
+                Crop(*self.game_crop).validate()
+                Crop(*self.webcam_crop).validate()
+                if not math.isfinite(self.webcam_fraction) or not .15 <= self.webcam_fraction <= .5:
+                    raise ValueError('fraction')
+                if not math.isfinite(self.source_aspect) or self.source_aspect <= 0:
+                    raise ValueError('aspect')
+            except (ValueError, TypeError) as exc:
+                raise ValueError('Сначала настрой две области: игру и вебку, затем примени их к подборке.') from exc
         if self.device not in ('cpu', 'cuda'):
             raise ValueError('Устройство распознавания должно быть CPU или NVIDIA CUDA.')
         if not isinstance(self.model, str) or not self.model.strip():
@@ -152,6 +168,8 @@ def run_auto_reels(
                 info = source_info(str(source))
                 if not math.isfinite(info.duration) or info.duration <= 0 or min(info.width, info.height) < 2:
                     raise ValueError('Не удалось определить длительность или размер видео.')
+                if options.layout in ('gaming', 'gaming_fit') and abs(info.width/info.height-options.source_aspect) > .02:
+                    raise ValueError('Пропорции исходника отличаются от шаблона игры и вебки. Настрой области для этой записи.')
                 check_cancel(cancel)
                 selected = []
                 transcript = None
@@ -214,6 +232,12 @@ def run_auto_reels(
                     zoom=options.zoom, zoom_at=highlight.peak,
                     vocabulary=options.vocabulary,
                 )
+                if layout in ('gaming', 'gaming_fit'):
+                    project.main = Crop(*options.game_crop)
+                    project.webcam = Crop(*options.webcam_crop)
+                    project.webcam_fraction = options.webcam_fraction
+                    if layout == 'gaming_fit':
+                        project.caption_y = int(1920 * options.webcam_fraction) // 2 * 2 + 130
                 if not info.has_audio:
                     # No recognition is possible anywhere in this source. Keep
                     # an editable empty caption track without retrying Whisper

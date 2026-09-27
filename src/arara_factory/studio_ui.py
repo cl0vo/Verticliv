@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from .studio_engine import (
     StudioProject, Crop, fitted_crop, transcribe,
-    export_video, find_highlights, source_info,
+    export_video, find_highlights, source_info, gaming_panels,
 )
 from .transcribe import RecognizedWord
 from .auto_reels_ui import AutoReelsPanel
@@ -69,7 +69,7 @@ class SourceCanvas(QWidget):
             return
         p.drawImage(area, self.frame)
         for name, color in [('main', '#b0f563'), ('webcam', '#9b8cff')]:
-            if name == 'webcam' and self.project.layout != 'gaming':
+            if name == 'webcam' and self.project.layout not in ('gaming', 'gaming_fit'):
                 continue
             crop = getattr(self.project, name)
             rect = QRectF(area.x()+crop.x*area.width(), area.y()+crop.y*area.height(), crop.w*area.width(), crop.h*area.height())
@@ -125,7 +125,18 @@ class OutputCanvas(QWidget):
         def draw(crop, dest):
             x, y, w, h = fitted_crop(crop, width, height, dest.width()/dest.height())
             p.drawImage(dest, self.frame, QRectF(x, y, w, h))
-        if project.layout == 'gaming':
+        if project.layout == 'gaming_fit':
+            cam_h, gap, game_h = gaming_panels(project)
+            p.fillRect(QRectF(0, 0, 1080, 1920), QColor('#101827'))
+            def contain(crop, box):
+                x, y, w, h = crop.pixels(width, height)
+                factor = min(box.width()/w, box.height()/h)
+                dw, dh = int(w*factor)//2*2, int(h*factor)//2*2
+                dest = QRectF(box.x()+(box.width()-dw)/2, box.y()+(box.height()-dh)/2, dw, dh)
+                p.drawImage(dest, self.frame, QRectF(x, y, w, h))
+            contain(project.webcam, QRectF(0, 0, 1080, cam_h))
+            contain(project.main, QRectF(0, cam_h+gap, 1080, game_h))
+        elif project.layout == 'gaming':
             cam_h = int(1920*project.webcam_fraction)//2*2
             draw(project.webcam, QRectF(0, 0, 1080, cam_h))
             draw(project.main, QRectF(0, cam_h, 1080, 1920-cam_h))
@@ -165,6 +176,7 @@ class StudioWindow(QMainWindow):
         self.legacy_factory = legacy_factory
         self.legacy = None
         self.last_output = None
+        self.batch_layout_regions = set()
         self.setWindowTitle(f'Verticliv {__version__} — Reels · Shorts · стримы')
         self.resize(1360, 900)
         self.setAcceptDrops(True)
@@ -180,6 +192,7 @@ class StudioWindow(QMainWindow):
         self.open_project_button = self.button('Открыть проект', self.load_project, header)
         self.save_project_button = self.button('Сохранить проект', self.save_project, header)
         self.legacy_button = self.button('Ещё: Brainrot / публикация', self.open_legacy, header)
+        self.batch_layout_button = self.button('Применить игру и вебку к подборке', self.apply_batch_layout, header)
         outer.addLayout(header)
         self.filename = QLabel('Перетащи видео в окно или нажми «＋ Видео»')
         outer.addWidget(self.filename)
@@ -274,7 +287,9 @@ class StudioWindow(QMainWindow):
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.layout_mode = QComboBox()
-        for label, value in [('Весь кадр + размытие','fit'),('Заполнить 9:16','fill'),('Игра + вебка сверху','gaming')]:
+        for label, value in [('Весь кадр + размытие','fit'),('Заполнить 9:16','fill'),
+                             ('Вебка + игра · без обрезки областей','gaming_fit'),
+                             ('Вебка + игра · заполнение с обрезкой','gaming')]:
             self.layout_mode.addItem(label,value)
         form.addRow('Компоновка',self.layout_mode)
         self.cam_size = QSpinBox()
@@ -379,12 +394,55 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
         self.workspaces.addTab(editor_page, 'Ручной редактор · субтитры и кадр')
         self.auto_reels_panel.busy_changed.connect(self.auto_busy_changed)
         self.auto_reels_panel.edit_requested.connect(self.open_auto_project)
+        self.auto_reels_panel.layout_requested.connect(self.configure_batch_layout)
         self.setCentralWidget(self.workspaces)
 
     def auto_busy_changed(self, busy):
         if busy:
             self.player.pause()
         self.workspaces.setTabEnabled(1, not busy)
+
+    def configure_batch_layout(self, name):
+        if self.task and self.task.isRunning():
+            return
+        if self.project.source:
+            answer = QMessageBox.question(self, 'Настроить игровой шаблон?',
+                'Открыть исходник для настройки областей? Несохранённые правки текущего проекта будут заменены.',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        try:
+            info = source_info(name)
+            template = self.auto_reels_panel.gaming_template or {}
+            reuse = abs(template.get('source_aspect', 0) - info.width/info.height) < .02
+            candidate = StudioProject(source=name, end=min(60, info.duration), layout='gaming_fit',
+                                      webcam_fraction=template.get('webcam_fraction', .32) if reuse else .32)
+            if reuse:
+                candidate.main = Crop(*template['game_crop'])
+                candidate.webcam = Crop(*template['webcam_crop'])
+            candidate.caption_y = gaming_panels(candidate)[0] + 130
+            self.open_video(name, candidate)
+            self.batch_layout_regions = {'main', 'webcam'} if reuse else set()
+            self.workspaces.setCurrentIndex(1)
+            self.region.setCurrentIndex(self.region.findData('webcam'))
+            self.status.setText('Выдели мышью ВЕБКУ, затем переключи «Выделять игру» и выдели ИГРУ. '
+                                'После проверки нажми «Применить игру и вебку к подборке».')
+        except Exception as exc:
+            self.failed(str(exc))
+
+    def apply_batch_layout(self):
+        if self.task and self.task.isRunning() or self.auto_reels_panel.busy:
+            return
+        if not self.info or self.project.layout not in ('gaming', 'gaming_fit'):
+            self.status.setText('Сначала открой запись и выбери компоновку «Вебка + игра».')
+            return
+        if self.batch_layout_regions != {'main', 'webcam'}:
+            self.status.setText('Выдели обе области мышью: игру и вебку. Для всей игры можно сбросить её область на весь кадр.')
+            return
+        self.sync()
+        self.auto_reels_panel.set_gaming_template(self.project, self.info.width, self.info.height)
+        self.player.pause()
+        self.workspaces.setCurrentIndex(0)
 
     def open_auto_project(self, name):
         if self.task and self.task.isRunning():
@@ -421,6 +479,12 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
         p.model,p.language,p.device = self.model.currentData(),self.language.currentData(),self.device.currentData()
         p.caption_style,p.font_size,p.caption_y = self.style.currentData(),self.font_size.value(),self.caption_y.value()
         p.vocabulary,p.zoom_at = self.vocabulary.text(),self.zoom_at.value()
+        if p.layout == 'gaming_fit':
+            p.caption_y = gaming_panels(p)[0] + 130
+            self.caption_y.blockSignals(True)
+            self.caption_y.setValue(p.caption_y)
+            self.caption_y.blockSignals(False)
+        self.caption_y.setEnabled(p.layout != 'gaming_fit')
         self.source_canvas.project = self.output_canvas.project = p
         self.source_canvas.update()
         self.output_canvas.update()
@@ -460,6 +524,7 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
             candidate = project or StudioProject(source=str(Path(name).resolve()),end=min(60,info.duration),captions=info.has_audio)
             candidate.validate(info.duration)
             self.project,self.info = candidate,info
+            self.batch_layout_regions = {'main', 'webcam'} if project and project.layout in ('gaming', 'gaming_fit') else set()
             self.filename.setText(f'{Path(name).name}  ·  {info.width}×{info.height}  ·  {info.duration:.1f} сек')
             self.player.setSource(QUrl.fromLocalFile(str(Path(name).resolve())))
             self.player.play()
@@ -504,10 +569,11 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
 
     def change_region(self):
         self.source_canvas.mode = self.region.currentData()
-        if self.source_canvas.mode == 'webcam':
-            self.layout_mode.setCurrentIndex(self.layout_mode.findData('gaming'))
+        if self.source_canvas.mode == 'webcam' and self.layout_mode.currentData() not in ('gaming', 'gaming_fit'):
+            self.layout_mode.setCurrentIndex(self.layout_mode.findData('gaming_fit'))
 
     def set_crop(self,name,crop):
+        self.batch_layout_regions.add(name)
         setattr(self.project,name,crop)
         self.sync()
 

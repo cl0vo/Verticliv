@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QThread, Qt, QUrl, Signal
@@ -42,6 +43,7 @@ class AutoReelsTask(QThread):
 class AutoReelsPanel(QWidget):
     busy_changed = Signal(bool)
     edit_requested = Signal(str)
+    layout_requested = Signal(str)
 
     def __init__(self, parent=None, settings=None):
         super().__init__(parent)
@@ -49,6 +51,12 @@ class AutoReelsPanel(QWidget):
         self.settings = settings if settings is not None else QSettings('ARARA', 'ARARA Factory')
         self.task = None
         self.report_path = ''
+        try:
+            self.gaming_template = json.loads(str(self.settings.value('auto_reels/gaming_template', 'null')))
+            if not isinstance(self.gaming_template, dict):
+                self.gaming_template = None
+        except (ValueError, TypeError):
+            self.gaming_template = None
         self.setAcceptDrops(True)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 20, 24, 20)
@@ -97,11 +105,20 @@ class AutoReelsPanel(QWidget):
         self.count.setValue(int(self.setting('count', 3)))
         form.addRow('До клипов с исходника', self.count)
         self.layout_mode = self.combo([
+            ('Вебка сверху + игра отдельно', 'gaming_fit'),
+            ('Вебка + игра · заполнение с обрезкой', 'gaming'),
             ('Авто · сохранить содержимое', 'auto'),
             ('Весь кадр + размытый фон', 'fit'),
             ('Заполнить 9:16 · обрезать края', 'fill'),
         ], 'layout', 'auto')
         form.addRow('Кадр 1080 × 1920', self.layout_mode)
+        self.configure_layout_button = QPushButton('Настроить области игры и вебки')
+        self.configure_layout_button.clicked.connect(self.configure_gaming)
+        form.addRow(self.configure_layout_button)
+        layout_note = QLabel('Для игровых записей выдели две области один раз. Шаблон применяется '
+                            'к записям с таким же расположением игры и камеры.')
+        layout_note.setWordWrap(True)
+        form.addRow(layout_note)
         self.captions = QCheckBox('Субтитры с подсветкой слов + SRT')
         self.captions.setChecked(self.setting('captions', True, bool))
         form.addRow(self.captions)
@@ -233,14 +250,35 @@ class AutoReelsPanel(QWidget):
         if profile == 'custom':
             return
         self.selection.setCurrentIndex(self.selection.findData('reactions' if profile == 'hearthstone' else 'speech'))
-        self.layout_mode.setCurrentIndex(self.layout_mode.findData('fit'))
+        self.layout_mode.setCurrentIndex(self.layout_mode.findData('gaming_fit' if profile == 'hearthstone' else 'fit'))
         self.clip_length.setValue(45 if profile in ('hearthstone', 'screen') else 30)
         self.captions.setChecked(True)
         self.zoom.setChecked(False)
         self.vocabulary.setText('Hearthstone, Хартстоун, таверна, Боб, поля сражений, боевой клич, предсмертный хрип'
                                 if profile == 'hearthstone' else '')
-        self.status.setText('Профиль применён. Игра сохраняется целиком; звуковые реакции нужно просмотреть.'
+        self.status.setText('Игровой профиль: настрой отдельные области игры и вебки. Реакции нужно просмотреть.'
                             if profile == 'hearthstone' else 'Профиль применён. Для границ реплик будет распознана вся выбранная часть записи.')
+
+    def configure_gaming(self):
+        if self.busy:
+            return
+        item = self.sources.currentItem()
+        path = item.data(Qt.ItemDataRole.UserRole) if item else next(iter(self.source_paths()), None)
+        if not path:
+            self.status.setText('Сначала добавь запись, чтобы выделить игру и вебку на её кадре.')
+            return
+        self.layout_requested.emit(path)
+
+    def set_gaming_template(self, project, width, height):
+        from dataclasses import astuple
+        values = {'game_crop': astuple(project.main), 'webcam_crop': astuple(project.webcam),
+                  'webcam_fraction': project.webcam_fraction, 'source_aspect': width / height}
+        AutoReelsOptions(layout=project.layout, **values).validate()
+        self.gaming_template = values
+        self.settings.setValue('auto_reels/gaming_template', json.dumps(values))
+        self.settings.setValue('auto_reels/layout', project.layout)
+        self.layout_mode.setCurrentIndex(self.layout_mode.findData(project.layout))
+        self.status.setText('Игра и вебка настроены отдельно. Шаблон сохранён для записей с таким же расположением областей.')
 
     def choose_twitch(self):
         if self.busy:
@@ -305,7 +343,14 @@ class AutoReelsPanel(QWidget):
             zoom=self.zoom.isChecked(), device='cpu',
             selection=self.selection.currentData(), vocabulary=self.vocabulary.text().strip(),
             skip_start=self.skip_start.value(), skip_end=self.skip_end.value(),
+            **{k: v for k, v in (self.gaming_template or {}).items()
+               if k in {'game_crop', 'webcam_crop', 'webcam_fraction', 'source_aspect'}},
         )
+        try:
+            options.validate()
+        except ValueError as exc:
+            self.status.setText(str(exc))
+            return
         for key, value in {'clip_length': options.clip_length, 'count': options.count,
                            'captions': options.captions, 'model': options.model,
                            'language': options.language, 'layout': options.layout,

@@ -64,7 +64,7 @@ def test_material_profiles_and_local_speech_defaults(tmp_path):
     assert w.selection.currentData() == 'speech'
     w.profile.setCurrentIndex(w.profile.findData('hearthstone'))
     assert w.selection.currentData() == 'reactions'
-    assert w.layout_mode.currentData() == 'fit'
+    assert w.layout_mode.currentData() == 'gaming_fit'
     assert w.clip_length.value() == 45
     assert 'Hearthstone' in w.vocabulary.text()
     assert not w.zoom.isChecked()

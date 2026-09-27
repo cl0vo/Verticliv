@@ -80,7 +80,7 @@ class StudioProject:
     transcript_ranges: list[list[float]] = field(default_factory=list)
 
     def validate(self, duration):
-        if self.layout not in ('fit', 'fill', 'gaming'):
+        if self.layout not in ('fit', 'fill', 'gaming', 'gaming_fit'):
             raise ValueError('Неизвестная компоновка')
         if self.encoder_mode not in ('auto', 'cpu', 'nvenc'):
             raise ValueError('Неизвестный видеокодер')
@@ -259,12 +259,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     srt_path.write_text('\n'.join(srt), encoding='utf-8-sig')
 
 
+def gaming_panels(project):
+    cam_h = int(1920 * project.webcam_fraction) // 2 * 2
+    # Dedicated caption band separates camera and gameplay.
+    gap = 180
+    return cam_h, gap, 1920 - cam_h - gap
+
+
 def layout_graph(project, width, height):
     cam_h = int(1920 * project.webcam_fraction) // 2 * 2
     def crop_chain(crop, out_w, out_h, zoom=1):
         x, y, w, h = fitted_crop(crop, width, height, out_w / out_h, zoom)
         return f'crop={w}:{h}:{x}:{y},scale={out_w}:{out_h},setsar=1'
-    if project.layout == 'gaming':
+    if project.layout == 'gaming_fit':
+        cam_h, gap, game_h = gaming_panels(project)
+        def fit_chain(crop, out_w, out_h):
+            x, y, w, h = crop.pixels(width, height)
+            return (f'crop={w}:{h}:{x}:{y},scale={out_w}:{out_h}:force_original_aspect_ratio=decrease:'
+                    f'force_divisible_by=2,pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2:color=0x101827,setsar=1')
+        graph = (f'[0:v]split=2[cam][game];[cam]{fit_chain(project.webcam,1080,cam_h)}[top];'
+                 f'[game]{fit_chain(project.main,1080,game_h)},pad=1080:{game_h+gap}:0:{gap}:color=0x101827[bottom];'
+                 '[top][bottom]vstack=inputs=2[layout]')
+    elif project.layout == 'gaming':
         graph = f'[0:v]split=2[cam][game];[cam]{crop_chain(project.webcam,1080,cam_h)}[top];[game]{crop_chain(project.main,1080,1920-cam_h)}[bottom];[top][bottom]vstack=inputs=2[layout]'
     elif project.layout == 'fill':
         graph = f'[0:v]{crop_chain(project.main,1080,1920)}[layout]'
