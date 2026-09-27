@@ -59,6 +59,22 @@ def test_empty_batch_cannot_start(tmp_path):
     w.close()
 
 
+def test_material_profiles_and_local_speech_defaults(tmp_path):
+    app, w = panel(tmp_path)
+    assert w.selection.currentData() == 'speech'
+    w.profile.setCurrentIndex(w.profile.findData('hearthstone'))
+    assert w.selection.currentData() == 'reactions'
+    assert w.layout_mode.currentData() == 'fit'
+    assert w.clip_length.value() == 45
+    assert 'Hearthstone' in w.vocabulary.text()
+    assert not w.zoom.isChecked()
+    w.profile.setCurrentIndex(w.profile.findData('speech'))
+    assert w.selection.currentData() == 'speech'
+    assert w.clip_length.value() == 30
+    assert w.vocabulary.text() == ''
+    w.close()
+
+
 def test_studio_starts_in_auto_workspace_and_locks_editor():
     app = QApplication.instance() or QApplication([])
     w = StudioWindow()

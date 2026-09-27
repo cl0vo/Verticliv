@@ -14,6 +14,8 @@ from .studio_engine import (
     Cancelled, Highlight, StudioProject, check_cancel, export_video,
     find_highlights, source_info, transcribe,
 )
+from .speech_selection import cached_transcript, speech_highlights, words_in_window
+from .reels_review import write_review
 
 
 @dataclass(frozen=True)
@@ -26,8 +28,19 @@ class AutoReelsOptions:
     layout: str = 'auto'
     zoom: bool = False
     device: str = 'cpu'
+    selection: str = 'reactions'
+    vocabulary: str = ''
+    skip_start: int = 0
+    skip_end: int = 0
 
     def validate(self) -> None:
+        if self.selection not in ('reactions', 'speech'):
+            raise ValueError('Выбери отбор по речи или звуковым реакциям.')
+        if not isinstance(self.vocabulary, str) or len(self.vocabulary) > 2000:
+            raise ValueError('Словарь должен содержать не более 2000 символов.')
+        if any(not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 86400
+               for v in (self.skip_start, self.skip_end)):
+            raise ValueError('Пропуск начала и конца должен быть от 0 до 86400 секунд.')
         if not isinstance(self.clip_length, (int, float)) or not math.isfinite(self.clip_length) or not 10 <= self.clip_length <= 180:
             raise ValueError('Длина клипа должна быть от 10 до 180 секунд.')
         if not isinstance(self.count, int) or isinstance(self.count, bool) or not 1 <= self.count <= 12:
@@ -120,6 +133,10 @@ def run_auto_reels(
         }
         temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
         temp.replace(path)
+        try:
+            write_review(run_dir / 'review.html', clips, status)
+        except OSError:
+            warn('Не удалось сохранить страницу просмотра подборки; MP4 и отчёт доступны отдельно.')
 
     save_report()
     try:
@@ -137,16 +154,35 @@ def run_auto_reels(
                     raise ValueError('Не удалось определить длительность или размер видео.')
                 check_cancel(cancel)
                 selected = []
-                if info.has_audio:
+                transcript = None
+                start, end = options.skip_start, info.duration - options.skip_end
+                if start >= end:
+                    raise ValueError('После пропуска начала и конца не осталось видео.')
+                if options.selection == 'speech':
+                    if not info.has_audio:
+                        raise ValueError('Для отбора по речи нужна аудиодорожка. Выбери режим звуковых реакций для видео без речи.')
+                    analysis = StudioProject(source=str(source), start=start, end=end,
+                                             model=options.model, language=options.language,
+                                             device=options.device, vocabulary=options.vocabulary)
+                    transcript = cached_transcript(
+                        analysis, output_dir / '.verticliv-cache', transcribe,
+                        lambda n, text: notify(base + share * .2 * n / 100, f'{prefix} · {text}'), cancel)
+                    selected = speech_highlights(transcript, end, options.clip_length, options.count, start=start)
+                    if not selected:
+                        raise ValueError('Не найдено достаточно связной речи для клипа. Попробуй режим звуковых реакций или ручной редактор.')
+                    warn(f'{source.name}: отбор по репликам и паузам — эвристика, а не оценка смысла или игрового события.')
+                elif info.has_audio:
+                    bounds = {'start': start, 'end': end} if options.skip_start or options.skip_end else {}
                     selected = find_highlights(
                         str(source), options.clip_length,
                         lambda n, text: notify(base + share * .2 * n / 100, f'{prefix} · поиск звуковых реакций'),
-                        cancel, count=options.count,
+                        cancel, count=options.count, **bounds,
                     )
                     selected = sorted(selected, key=lambda item: item.score, reverse=True)[:options.count]
                     selected.sort(key=lambda item: item.start)
                 if not selected:
-                    selected = _fallback_clips(info.duration, options.clip_length, options.count)
+                    selected = [Highlight(h.start + start, h.end + start, h.peak + start, h.score, h.reason)
+                                for h in _fallback_clips(end - start, options.clip_length, options.count)]
                     why = 'нет аудиодорожки' if not info.has_audio else 'не найдены яркие звуковые реакции'
                     warn(f'{source.name}: {why}; выбраны равномерные фрагменты, их стоит просмотреть.')
                 if options.captions and not info.has_audio:
@@ -176,6 +212,7 @@ def run_auto_reels(
                     layout=layout, captions=options.captions, model=options.model,
                     language=options.language, device=options.device,
                     zoom=options.zoom, zoom_at=highlight.peak,
+                    vocabulary=options.vocabulary,
                 )
                 if not info.has_audio:
                     # No recognition is possible anywhere in this source. Keep
@@ -184,8 +221,11 @@ def run_auto_reels(
                     project.transcript_ranges = [[0, info.duration]]
                 try:
                     project.validate(info.duration)
+                    if transcript is not None:
+                        project.words = words_in_window(transcript, project.start, project.end)
+                        project.transcript_ranges = [[project.start, project.end]]
                     if options.captions and info.has_audio:
-                        project.words = transcribe(
+                        project.words = words_in_window(transcript, project.start, project.end) if transcript is not None else transcribe(
                             project,
                             lambda n, text: notify(clip_base + clip_share * .45 * n / 100, f'{label} · {text}'),
                             cancel,
@@ -205,11 +245,19 @@ def run_auto_reels(
                     if not target.is_file() or target.stat().st_size == 0:
                         raise RuntimeError('Экспорт не создал готовый видеофайл.')
                     result.outputs.append(str(target))
+                    # Reusable text is drawn only from recognized source words.
+                    text_path = target.with_suffix('.txt')
+                    clip_text = ' '.join(w.text for w in project.words)
+                    try:
+                        text_path.write_text(clip_text, encoding='utf-8')
+                    except OSError:
+                        warn(f'{target.name}: не удалось сохранить текстовый файл субтитров.')
                     clips.append({
                         'source': str(source), 'start': project.start, 'end': project.end,
                         'output': str(target), 'project': str(project_path),
                         'srt': str(target.with_suffix('.srt')) if project.captions else None,
                         'words': len(project.words), 'reason': highlight.reason,
+                        'transcript': str(text_path) if text_path.is_file() else None,
                     })
                 except Cancelled:
                     raise

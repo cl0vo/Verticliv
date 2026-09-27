@@ -9,10 +9,11 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
-    QProgressBar, QPushButton, QSpinBox, QSplitter, QTextEdit, QVBoxLayout, QWidget,
+    QProgressBar, QPushButton, QScrollArea, QSpinBox, QSplitter, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from .auto_reels import AutoReelsOptions, run_auto_reels
+from .twitch_import_ui import TwitchImportDialog
 
 
 VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.ts',
@@ -74,12 +75,23 @@ class AutoReelsPanel(QWidget):
         self.summary.setWordWrap(True)
         sources_box.addWidget(self.summary)
         body.addLayout(sources_box, 3)
-        form = QFormLayout()
+        options_widget = QWidget()
+        form = QFormLayout(options_widget)
+        self.profile = QComboBox()
+        for label, value in [('Настроить вручную', 'custom'), ('Разговор / рассказ', 'speech'),
+                             ('Игра / Hearthstone', 'hearthstone'), ('Экран / обучение', 'screen')]:
+            self.profile.addItem(label, value)
+        form.addRow('Тип материала', self.profile)
+        self.selection = self.combo([
+            ('Реплики и паузы · полная расшифровка', 'speech'),
+            ('Звуковые реакции · быстрый поиск', 'reactions'),
+        ], 'selection', 'speech')
+        form.addRow('Как отбирать', self.selection)
         self.clip_length = QSpinBox()
         self.clip_length.setRange(10, 180)
         self.clip_length.setSuffix(' сек')
         self.clip_length.setValue(int(self.setting('clip_length', 30)))
-        form.addRow('Длина клипа', self.clip_length)
+        form.addRow('Ориентир длины', self.clip_length)
         self.count = QSpinBox()
         self.count.setRange(1, 12)
         self.count.setValue(int(self.setting('count', 3)))
@@ -100,18 +112,37 @@ class AutoReelsPanel(QWidget):
         form.addRow('Распознавание на CPU', self.model)
         self.language = self.combo([('Авто', 'auto'), ('Русский', 'ru'), ('English', 'en')], 'language', 'auto')
         form.addRow('Язык', self.language)
+        self.vocabulary = QLineEdit(str(self.setting('vocabulary', '')))
+        self.vocabulary.setMaxLength(2000)
+        self.vocabulary.setPlaceholderText('Имена, названия, игровые термины')
+        form.addRow('Словарь речи', self.vocabulary)
+        self.skip_start = QSpinBox()
+        self.skip_end = QSpinBox()
+        for control, key in ((self.skip_start, 'skip_start'), (self.skip_end, 'skip_end')):
+            control.setRange(0, 86400)
+            control.setSuffix(' сек')
+            control.setValue(int(self.setting(key, 0)))
+        form.addRow('Пропустить начало', self.skip_start)
+        form.addRow('Пропустить конец', self.skip_end)
         self.zoom = QCheckBox('Лёгкий зум на пике реакции')
         self.zoom.setChecked(self.setting('zoom', False, bool))
         form.addRow(self.zoom)
-        note = QLabel('Хайлайты выбираются по энергии звука. Тихие видео — равномерные фрагменты. '
-                      'Результаты стоит просмотреть перед публикацией.\n\n'
-                      'Распознавание локальное; модель скачивается при первом использовании. '
-                      'Клипы обрабатываются по одному, без перегрузки ПК.')
+        note = QLabel('Реплики: сначала расшифровка всей выбранной части — дольше, '
+                      'зато границы по словам и паузам. Длина может отличаться от ориентира. '
+                      'Реакции: быстрый поиск по громкости. Оба режима пока эвристические, '
+                      'без понимания игрового события.\n\n'
+                      'Речь обрабатывается локально. Кэш расшифровок в .verticliv-cache рядом '
+                      'с подборками ускоряет повторный запуск. Видео никуда не отправляется.')
         note.setWordWrap(True)
         note.setMaximumWidth(360)
         note.setStyleSheet('color:#9daac0')
         form.addRow(note)
-        body.addLayout(form, 2)
+        options_scroll = QScrollArea()
+        options_scroll.setWidgetResizable(True)
+        options_scroll.setWidget(options_widget)
+        options_scroll.setMinimumWidth(370)
+        body.addWidget(options_scroll, 2)
+        self.profile.currentIndexChanged.connect(self.apply_profile)
         outer.addWidget(self.controls, 2)
         output_row = QHBoxLayout()
         output_row.addWidget(QLabel('Сохранять в'))
@@ -141,6 +172,7 @@ class AutoReelsPanel(QWidget):
         results.addWidget(self.log)
         outer.addWidget(results, 1)
         bottom = QHBoxLayout()
+        self.button('Смотреть подборку', self.open_review, bottom)
         self.button('Открыть папку результатов', self.open_folder, bottom)
         self.button('Править выбранный клип', self.edit_result, bottom)
         self.button('Открыть отчёт', self.open_report, bottom)
@@ -196,6 +228,43 @@ class AutoReelsPanel(QWidget):
         paths, _ = QFileDialog.getOpenFileNames(self, 'Добавить исходники', '', VIDEO_FILTER)
         self.add_paths(paths)
 
+    def apply_profile(self):
+        profile = self.profile.currentData()
+        if profile == 'custom':
+            return
+        self.selection.setCurrentIndex(self.selection.findData('reactions' if profile == 'hearthstone' else 'speech'))
+        self.layout_mode.setCurrentIndex(self.layout_mode.findData('fit'))
+        self.clip_length.setValue(45 if profile in ('hearthstone', 'screen') else 30)
+        self.captions.setChecked(True)
+        self.zoom.setChecked(False)
+        self.vocabulary.setText('Hearthstone, Хартстоун, таверна, Боб, поля сражений, боевой клич, предсмертный хрип'
+                                if profile == 'hearthstone' else '')
+        self.status.setText('Профиль применён. Игра сохраняется целиком; звуковые реакции нужно просмотреть.'
+                            if profile == 'hearthstone' else 'Профиль применён. Для границ реплик будет распознана вся выбранная часть записи.')
+
+    def choose_twitch(self):
+        if self.busy:
+            return
+        dialog = TwitchImportDialog(self.settings, VIDEO_EXTENSIONS, self)
+        try:
+            if dialog.exec() != TwitchImportDialog.DialogCode.Accepted:
+                return
+            if self.busy or not dialog.selected_path or dialog.selected_source is None:
+                return
+            self.add_paths([dialog.selected_path])
+            key = os.path.normcase(dialog.selected_path)
+            for index in range(self.sources.count()):
+                item = self.sources.item(index)
+                path = item.data(Qt.ItemDataRole.UserRole)
+                if os.path.normcase(path) == key:
+                    metadata = dialog.selected_source.to_dict()
+                    item.setData(int(Qt.ItemDataRole.UserRole) + 1, metadata)
+                    item.setToolTip(path + '\nTwitch · источник: ' + dialog.selected_source.canonical_url)
+                    self.status.setText('Запись Twitch добавлена из локального файла. Проверь длину клипов и создай подборку.')
+                    break
+        finally:
+            dialog.deleteLater()
+
     def choose_folder(self):
         name = QFileDialog.getExistingDirectory(self, 'Добавить видео из папки')
         if name:
@@ -234,11 +303,15 @@ class AutoReelsPanel(QWidget):
             captions=self.captions.isChecked(), model=self.model.currentData(),
             language=self.language.currentData(), layout=self.layout_mode.currentData(),
             zoom=self.zoom.isChecked(), device='cpu',
+            selection=self.selection.currentData(), vocabulary=self.vocabulary.text().strip(),
+            skip_start=self.skip_start.value(), skip_end=self.skip_end.value(),
         )
         for key, value in {'clip_length': options.clip_length, 'count': options.count,
                            'captions': options.captions, 'model': options.model,
                            'language': options.language, 'layout': options.layout,
-                           'zoom': options.zoom, 'output': self.output.text().strip()}.items():
+                           'zoom': options.zoom, 'output': self.output.text().strip(),
+                           'selection': options.selection, 'vocabulary': options.vocabulary,
+                           'skip_start': options.skip_start, 'skip_end': options.skip_end}.items():
             self.settings.setValue('auto_reels/' + key, value)
         self.results.clear()
         self.log.clear()
@@ -322,3 +395,9 @@ class AutoReelsPanel(QWidget):
     def open_report(self):
         if self.report_path and Path(self.report_path).is_file():
             QDesktopServices.openUrl(QUrl.fromLocalFile(self.report_path))
+
+    def open_review(self):
+        if self.report_path:
+            path = Path(self.report_path).parent / 'review.html'
+            if path.is_file():
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))

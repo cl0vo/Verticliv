@@ -363,19 +363,23 @@ def rank_highlights(energy, duration, clip_length=30, count=8):
     return candidates
 
 
-def find_highlights(source, clip_length=30, progress=lambda n, s: None, cancel=lambda: False, *, count=8):
+def find_highlights(source, clip_length=30, progress=lambda n, s: None, cancel=lambda: False, *, count=8, start=0, end=None):
     import numpy as np
     info = source_info(source)
     if not info.has_audio:
         raise ValueError('Для поиска по реакциям нужна аудиодорожка')
+    end = info.duration if end is None else end
+    if not all(math.isfinite(v) for v in (start, end)) or not 0 <= start < end <= info.duration + .05:
+        raise ValueError('Некорректный диапазон поиска реакций')
     with tempfile.TemporaryDirectory(prefix='vertical-highlights-') as td:
         wav = Path(td) / 'audio.wav'
-        run_ffmpeg(['-i', source, '-vn', '-ac', '1', '-ar', '8000', '-c:a', 'pcm_s16le', str(wav)],
-                   info.duration, progress, cancel)
+        run_ffmpeg(['-ss', str(start), '-i', source, '-t', str(end-start), '-vn', '-ac', '1', '-ar', '8000', '-c:a', 'pcm_s16le', str(wav)],
+                   end-start, progress, cancel)
         energy = []
         with wave.open(str(wav), 'rb') as stream:
             while chunk := stream.readframes(8000):
                 check_cancel(cancel)
                 samples = np.frombuffer(chunk, dtype='<i2').astype(np.float32) / 32768
                 energy.append(float(np.sqrt(np.mean(samples * samples))))
-        return rank_highlights(energy, info.duration, clip_length, count)
+        return [replace(h, start=h.start + start, end=h.end + start, peak=h.peak + start)
+                for h in rank_highlights(energy, end-start, clip_length, count)]
