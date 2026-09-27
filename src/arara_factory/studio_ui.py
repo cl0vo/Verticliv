@@ -367,7 +367,8 @@ class StudioWindow(QMainWindow):
 QPushButton { background:#263348; border:1px solid #3b4a61; border-radius:6px; padding:8px; }
 QPushButton:hover { background:#35445d; } QPushButton:disabled {color:#62718a;}
 QLineEdit,QSpinBox,QDoubleSpinBox,QComboBox {padding:6px;background:#192437;border:1px solid #344259;border-radius:4px;}
-QTableWidget,QListWidget {background:#101a2b;gridline-color:#2e3d52;} QHeaderView::section {background:#243248;padding:6px;}
+QTableWidget,QListWidget,QTextEdit {background:#101a2b;color:#e6edf7;gridline-color:#2e3d52;border:1px solid #344259;} QHeaderView::section {background:#243248;padding:6px;}
+QTabWidget::pane {border:1px solid #344259;}
 QTabBar::tab {padding:9px 20px;background:#1b283d;} QTabBar::tab:selected {color:#b0f563;background:#2a3a50;}
 QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QProgressBar::chunk {background:#689d39;}
 ''')

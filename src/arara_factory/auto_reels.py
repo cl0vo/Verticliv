@@ -177,6 +177,11 @@ def run_auto_reels(
                     language=options.language, device=options.device,
                     zoom=options.zoom, zoom_at=highlight.peak,
                 )
+                if not info.has_audio:
+                    # No recognition is possible anywhere in this source. Keep
+                    # an editable empty caption track without retrying Whisper
+                    # when the saved clip is opened in the manual editor.
+                    project.transcript_ranges = [[0, info.duration]]
                 try:
                     project.validate(info.duration)
                     if options.captions and info.has_audio:

@@ -164,7 +164,7 @@ jobs:
       - name: Smoke-test real render and queue migration
         shell: pwsh
         run: |
-          .\ffmpeg.exe -y -hide_banner -loglevel error -f lavfi -i "color=c=blue:s=270x480:r=30" -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 9 -shortest -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac smoke-reel.mp4
+          .\ffmpeg.exe -y -hide_banner -loglevel error -f lavfi -i "color=c=blue:s=540x960:r=30" -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 9 -shortest -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac smoke-reel.mp4
           .\ffmpeg.exe -y -hide_banner -loglevel error -f lavfi -i "color=c=red:s=320x180:r=30" -t 20 -c:v libx264 -preset ultrafast -pix_fmt yuv420p smoke-brainrot.mp4
           @'
           import subprocess

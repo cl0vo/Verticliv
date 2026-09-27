@@ -81,6 +81,10 @@ def test_fallback_is_non_overlapping_and_explicit_about_missing_speech(source, t
     assert any('равномерные' in warning for warning in result.warnings)
     assert any('SRT будет пустым' in warning for warning in result.warnings)
     assert all(Path(output).with_suffix('.srt').read_text(encoding='utf-8') == '' for output in result.outputs)
+    if not audio:
+        for output in result.outputs:
+            restored = StudioProject.load(Path(output).with_suffix('.verticliv.json'))
+            assert restored.transcript_ranges == [[0, 75]]
 
 
 def test_bad_source_and_one_failed_clip_do_not_discard_success(source, tmp_path, monkeypatch, fake_export):
