@@ -1,11 +1,11 @@
-# Публикация ARARA Factory: TikTok, Instagram Reels, YouTube Shorts
+# Публикация Verticliv: TikTok, Instagram Reels, YouTube Shorts
 
-ARARA Factory использует только официальные API. Cookies, пароли аккаунтов и браузерная эмуляция не применяются.
+Verticliv использует только официальные API. Cookies, пароли аккаунтов и браузерная эмуляция не применяются.
 
 ## Общий сценарий
 
 1. Один раз создай developer-приложения платформ.
-2. В ARARA Factory открой `4. ПУБЛИКАЦИЯ → Подключения`.
+2. В Verticliv открой «Ещё: Brainrot / публикация», затем `4. ПУБЛИКАЦИЯ → Подключения`.
 3. Подключи нужные аккаунты через браузер.
 4. Оставь отмеченными только подключённые платформы. Можно использовать только YouTube.
 5. Нажми `Выбрать Reels` для отдельных файлов или `Выбрать папку` для всей папки.
@@ -16,9 +16,11 @@ ARARA Factory использует только официальные API. Cook
 
 Программа сама запускает очередь. Если в очереди уже есть ролики, новые файлы ставятся после последнего запланированного Reel и не накладываются на прежнее расписание.
 
-Не закрывай ARARA Factory, пока расписание должно работать. Очередь сохраняется между запусками. После перезапуска можно продолжить её кнопкой `ЗАПУСТИТЬ ОЧЕРЕДЬ`.
+Не закрывай Verticliv, пока расписание должно работать. Очередь сохраняется между запусками. После перезапуска можно продолжить её кнопкой `ЗАПУСТИТЬ ОЧЕРЕДЬ`.
 
 Токены хранятся в `%LOCALAPPDATA%\ARARA Factory\publishing-credentials.dat` и шифруются Windows DPAPI для текущего пользователя Windows.
+
+Служебная папка `ARARA Factory` и пространство настроек `ARARA / ARARA Factory` намеренно сохранены после переименования в Verticliv. Это позволяет использовать прежние подключения, очередь и настройки без переноса данных и повторного входа в YouTube.
 
 ## Выбор готовых Reels
 
@@ -36,7 +38,7 @@ ARARA Factory использует только официальные API. Cook
 3. Запроси scopes `user.info.basic` и `video.publish`.
 4. Для Desktop Login зарегистрируй redirect URI:
    `http://127.0.0.1:*/callback/`
-5. Скопируй Client key и Client secret в ARARA Factory.
+5. Скопируй Client key и Client secret в Verticliv.
 6. Нажми `Подключить TikTok через браузер`.
 
 Документация:
@@ -55,7 +57,7 @@ ARARA Factory использует только официальные API. Cook
    - `instagram_business_content_publish`
 5. Зарегистрируй точный redirect URI:
    `http://127.0.0.1:8788/callback/`
-6. В ARARA Factory укажи App ID и App Secret.
+6. В Verticliv укажи App ID и App Secret.
 7. Нажми `Подключить Instagram через браузер`.
 
 Документация:
@@ -71,7 +73,7 @@ ARARA Factory использует только официальные API. Cook
 3. Настрой OAuth consent screen.
 4. Создай OAuth Client ID типа `Desktop app`.
 5. Скачай `client_secret.json`.
-6. В ARARA Factory выбери JSON и нажми `Подключить YouTube через браузер`.
+6. В Verticliv выбери JSON и нажми `Подключить YouTube через браузер`.
 
 Документация:
 - https://developers.google.com/youtube/v3/guides/authentication

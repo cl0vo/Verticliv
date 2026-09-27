@@ -13,7 +13,7 @@ def generate(
 ) -> None:
     """Validate inputs and prepare an ARARA render job."""
     settings = yaml.safe_load(config.read_text(encoding="utf-8"))
-    typer.echo(f"ARARA Factory: {input_file.name}")
+    typer.echo(f"Verticliv: {input_file.name}")
     typer.echo(f"Variants: {settings.get('variants', 1)}")
     typer.echo("Pipeline scaffold is ready; FFmpeg renderer is the next module.")
 

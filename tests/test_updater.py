@@ -43,6 +43,21 @@ def test_current_or_missing_release_is_ignored() -> None:
     assert release_from_payload({"tag_name": "v0.11.0", "assets": []}, "0.10.0") is None
 
 
+def test_verticliv_installer_is_preferred_over_legacy_alias() -> None:
+    assets = [
+        {"name": name, "browser_download_url": f"https://github.com/cl0vo/Verticliv/releases/download/v0.19.0/{name}"}
+        for name in ("ARARA-Factory-Setup.exe", "Verticliv-Setup.exe")
+    ]
+    info = release_from_payload({"tag_name": "v0.19.0", "assets": assets}, "0.18.0")
+    assert info is not None
+    assert info.download_url.endswith("/Verticliv-Setup.exe")
+
+
+def test_updater_uses_renamed_repository() -> None:
+    from arara_factory.updater import LATEST_RELEASE_API
+    assert LATEST_RELEASE_API == "https://api.github.com/repos/cl0vo/Verticliv/releases/latest"
+
+
 def test_http_404_reports_that_release_is_not_published(monkeypatch) -> None:
     def missing_release(*args, **kwargs):
         raise urllib.error.HTTPError(

@@ -35,11 +35,11 @@ class OAuthCallback:
                 message = (
                     f"Ошибка авторизации: {error}"
                     if error
-                    else "Аккаунт подключён. Это окно можно закрыть и вернуться в ARARA Factory."
+                    else "Аккаунт подключён. Это окно можно закрыть и вернуться в Verticliv."
                 )
                 body = (
                     "<!doctype html><meta charset='utf-8'>"
-                    "<title>ARARA Factory</title>"
+                    "<title>Verticliv</title>"
                     "<body style='background:#0b0a0d;color:#f1c36d;font:20px Segoe UI;"
                     "display:grid;place-items:center;height:100vh;margin:0'>"
                     f"<div>{html.escape(message)}</div></body>"

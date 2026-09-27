@@ -8,10 +8,11 @@ import tempfile
 import time
 import wave
 from dataclasses import asdict, dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 
 from .process_utils import popen_hidden, run_hidden, keep_system_awake
-from .render import _binary, probe_media
+from .render import RenderOptions, _binary, _video_encoder_args, probe_media
 from .subtitles import ass_time, _ass_escape, group_words
 from .transcribe import RecognizedWord
 
@@ -70,6 +71,7 @@ class StudioProject:
     model: str = 'small'
     language: str = 'ru'
     device: str = 'cpu'
+    encoder_mode: str = 'auto'
     vocabulary: str = ''
     zoom: bool = False
     zoom_at: float = 0
@@ -80,6 +82,8 @@ class StudioProject:
     def validate(self, duration):
         if self.layout not in ('fit', 'fill', 'gaming'):
             raise ValueError('Неизвестная компоновка')
+        if self.encoder_mode not in ('auto', 'cpu', 'nvenc'):
+            raise ValueError('Неизвестный видеокодер')
         if not all(math.isfinite(x) for x in (self.start, self.end, self.webcam_fraction, self.zoom_at, self.zoom_duration)):
             raise ValueError('Некорректное время')
         if not 0 <= self.start < self.end <= duration + .05:
@@ -174,11 +178,19 @@ def run_ffmpeg(args, duration, progress=lambda n, s: None, cancel=lambda: False,
     progress(100, 'Готово')
 
 
-def transcribe(project, progress=lambda n, s: None, cancel=lambda: False):
+@lru_cache(maxsize=1)
+def _whisper_model(model_name: str, device: str):
+    """Reuse only the last model so successive clips do not reload its weights."""
     try:
         from faster_whisper import WhisperModel
     except ImportError as exc:
         raise RuntimeError('Не установлен faster-whisper. Обнови программу или выполни pip install faster-whisper.') from exc
+    return WhisperModel(model_name, device=device,
+                        compute_type='int8' if device == 'cpu' else 'float16',
+                        cpu_threads=4)
+
+
+def transcribe(project, progress=lambda n, s: None, cancel=lambda: False):
     info = source_info(project.source)
     project.validate(info.duration)
     if not info.has_audio:
@@ -190,9 +202,7 @@ def transcribe(project, progress=lambda n, s: None, cancel=lambda: False):
                     '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', str(audio)], duration,
                    lambda n, s: progress(n // 10, 'Подготовка звука'), cancel)
         progress(10, 'Загрузка модели Whisper (первый запуск требует интернет). Отмена — после загрузки модели.')
-        model = WhisperModel(project.model, device=project.device,
-                             compute_type='int8' if project.device == 'cpu' else 'float16',
-                             cpu_threads=4)
+        model = _whisper_model(project.model, project.device)
         check_cancel(cancel)
         segments, _ = model.transcribe(str(audio), language=None if project.language == 'auto' else project.language,
             word_timestamps=True, vad_filter=True, beam_size=5,
@@ -287,14 +297,37 @@ def export_video(project, target: Path, progress=lambda n, s: None, cancel=lambd
         else:
             graph += ';[composed]null[vout]'
         duration = project.end - project.start
-        args = ['-ss', str(project.start), '-i', str(Path(project.source).resolve()), '-t', str(duration),
+        base_args = ['-ss', str(project.start), '-i', str(Path(project.source).resolve()), '-t', str(duration),
                 '-filter_complex_threads', '1', '-filter_complex', graph, '-map', '[vout]', '-map', '0:a:0?',
-                '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-r', '30',
+                '-r', '30']
+        audio_args = [
                 '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', str(tmp / 'result.mp4')]
-        run_ffmpeg(args, duration, progress, cancel, cwd=tmp)
+        encoder_options = RenderOptions(
+            encoder_mode='nvidia' if project.encoder_mode == 'nvenc' else project.encoder_mode,
+            encoder_preset='veryfast', crf=20,
+        )
+        ffmpeg = binary('ffmpeg')
+        encoder_args, encoder_name = _video_encoder_args(ffmpeg, encoder_options)
+        progress(0, f'Кодирование: {encoder_name}')
+        try:
+            run_ffmpeg([*base_args, *encoder_args, *audio_args], duration, progress, cancel, cwd=tmp)
+        except Cancelled:
+            raise
+        except RuntimeError:
+            if encoder_name != 'NVIDIA NVENC':
+                raise
+            check_cancel(cancel)
+            progress(0, 'NVIDIA недоступна · повторяю на CPU')
+            (tmp / 'result.mp4').unlink(missing_ok=True)
+            cpu_args, _ = _video_encoder_args(ffmpeg, encoder_options, force_cpu=True)
+            run_ffmpeg([*base_args, *cpu_args, *audio_args], duration, progress, cancel, cwd=tmp)
         check_cancel(cancel)
         result = probe_media(binary('ffprobe'), tmp / 'result.mp4')
-        if result.width != 1080 or result.height != 1920 or abs(result.duration-duration) > .3:
+        if (result.width != 1080 or result.height != 1920
+                or not math.isfinite(result.duration) or result.duration <= 0
+                or abs(result.duration-duration) > max(.3, duration * .005)
+                or not math.isfinite(result.fps) or abs(result.fps - 30) > .1
+                or (info.has_audio and not result.has_audio)):
             raise RuntimeError('Проверка готового видео не пройдена')
         (tmp / 'result.mp4').replace(target)
         if project.captions:
@@ -330,7 +363,7 @@ def rank_highlights(energy, duration, clip_length=30, count=8):
     return candidates
 
 
-def find_highlights(source, clip_length=30, progress=lambda n, s: None, cancel=lambda: False):
+def find_highlights(source, clip_length=30, progress=lambda n, s: None, cancel=lambda: False, *, count=8):
     import numpy as np
     info = source_info(source)
     if not info.has_audio:
@@ -345,4 +378,4 @@ def find_highlights(source, clip_length=30, progress=lambda n, s: None, cancel=l
                 check_cancel(cancel)
                 samples = np.frombuffer(chunk, dtype='<i2').astype(np.float32) / 32768
                 energy.append(float(np.sqrt(np.mean(samples * samples))))
-        return rank_highlights(energy, info.duration, clip_length)
+        return rank_highlights(energy, info.duration, clip_length, count)

@@ -38,7 +38,7 @@ class SmartMainWindow(PublishingLibraryWindow):
         self.create_next_buttons: list[QPushButton] = []
         self.publish_next_buttons: list[QPushButton] = []
 
-        self.setWindowTitle(f"ARARA Factory {__version__}")
+        self.setWindowTitle(f"Verticliv {__version__}")
         self.resize(1380, 900)
         self.setMinimumSize(1080, 720)
 

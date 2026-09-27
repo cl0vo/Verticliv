@@ -21,8 +21,8 @@ def _acquire_single_instance() -> bool:
     if already_exists:
         ctypes.windll.user32.MessageBoxW(
             None,
-            "ARARA Factory уже открыта. Используй текущее окно программы.",
-            "ARARA Factory",
+            "Verticliv уже открыта. Используй текущее окно программы.",
+            "Verticliv",
             0x40,
         )
         return False

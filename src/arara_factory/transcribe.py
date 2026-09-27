@@ -44,7 +44,7 @@ def model_path() -> Path:
             return candidate
     raise RuntimeError(
         'Русская модель субтитров не найдена внутри программы. '
-        'Переустанови последнюю версию ARARA Factory.'
+        'Переустанови последнюю версию Verticliv.'
     )
 
 

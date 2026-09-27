@@ -39,7 +39,7 @@ def download_video(url: str, cache_dir: Path, progress=lambda done, total: None)
     request = urllib.request.Request(
         url,
         headers={
-            'User-Agent': 'ARARA-Factory/0.4 (+local video compositor)',
+            'User-Agent': 'Verticliv (+local video compositor)',
             'Accept': 'video/*,application/octet-stream;q=0.9,*/*;q=0.5',
         },
     )

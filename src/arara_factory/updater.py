@@ -11,10 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-REPOSITORY = "cl0vo/vertical"
+REPOSITORY = "cl0vo/Verticliv"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
-INSTALLER_ASSET_NAME = "ARARA-Factory-Setup.exe"
-USER_AGENT = "ARARA-Factory-Updater"
+INSTALLER_ASSET_NAME = "Verticliv-Setup.exe"
+LEGACY_INSTALLER_ASSET_NAME = "ARARA-Factory-Setup.exe"
+USER_AGENT = "Verticliv-Updater"
 
 
 @dataclass(frozen=True)
@@ -55,8 +56,9 @@ def release_from_payload(payload: dict, current_version: str) -> UpdateInfo | No
     asset = next(
         (
             item
+            for name in (INSTALLER_ASSET_NAME, LEGACY_INSTALLER_ASSET_NAME)
             for item in assets
-            if str(item.get("name") or "").lower() == INSTALLER_ASSET_NAME.lower()
+            if str(item.get("name") or "").lower() == name.lower()
         ),
         None,
     )
@@ -124,7 +126,7 @@ def download_update(
     progress: Callable[[int], None] | None = None,
     timeout: int = 60,
 ) -> Path:
-    target = update_directory() / f"ARARA-Factory-Setup-{info.version}.exe"
+    target = update_directory() / f"Verticliv-Setup-{info.version}.exe"
     partial = target.with_suffix(".download")
     request = urllib.request.Request(
         info.download_url,

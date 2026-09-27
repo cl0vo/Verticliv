@@ -1,0 +1,324 @@
+"""Local batch workspace: import many sources, produce a reviewable set of reels."""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from PySide6.QtCore import QSettings, QThread, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (
+    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFormLayout,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
+    QProgressBar, QPushButton, QSpinBox, QSplitter, QTextEdit, QVBoxLayout, QWidget,
+)
+
+from .auto_reels import AutoReelsOptions, run_auto_reels
+
+
+VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.ts',
+                    '.mts', '.m2ts', '.flv', '.wmv', '.mpg', '.mpeg', '.ogv'}
+VIDEO_FILTER = 'Видео (' + ' '.join('*' + s for s in sorted(VIDEO_EXTENSIONS)) + ');;Все файлы (*)'
+
+
+class AutoReelsTask(QThread):
+    progress = Signal(int, str)
+    done = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, sources, output, options, parent=None):
+        super().__init__(parent)
+        self.sources, self.output, self.options = sources, output, options
+
+    def run(self):
+        try:
+            result = run_auto_reels(self.sources, self.output, self.options,
+                                    self.progress.emit, self.isInterruptionRequested)
+            self.done.emit(result)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class AutoReelsPanel(QWidget):
+    busy_changed = Signal(bool)
+    edit_requested = Signal(str)
+
+    def __init__(self, parent=None, settings=None):
+        super().__init__(parent)
+        # Keep the existing settings namespace: upgrading must not reset the user.
+        self.settings = settings if settings is not None else QSettings('ARARA', 'ARARA Factory')
+        self.task = None
+        self.report_path = ''
+        self.setAcceptDrops(True)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 20, 24, 20)
+        title = QLabel('Из исходников — в подборку Reels')
+        title.setStyleSheet('font-size:26px;font-weight:800;color:#b0f563')
+        outer.addWidget(title)
+        intro = QLabel('1 · Добавь видео    →    2 · Выбери длину и субтитры    →    3 · Получи готовые клипы')
+        intro.setWordWrap(True)
+        outer.addWidget(intro)
+        self.controls = QWidget()
+        body = QHBoxLayout(self.controls)
+        body.setContentsMargins(0, 12, 0, 12)
+        sources_box = QVBoxLayout()
+        row = QHBoxLayout()
+        self.add_button = self.button('＋ Видео', self.choose_files, row)
+        self.folder_button = self.button('＋ Папка', self.choose_folder, row)
+        self.remove_button = self.button('Убрать выбранные', self.remove_selected, row)
+        sources_box.addLayout(row)
+        self.sources = QListWidget()
+        self.sources.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.sources.setMinimumHeight(130)
+        sources_box.addWidget(self.sources, 1)
+        self.summary = QLabel('Перетащи сюда несколько видео. Исходники останутся без изменений.')
+        self.summary.setWordWrap(True)
+        sources_box.addWidget(self.summary)
+        body.addLayout(sources_box, 3)
+        form = QFormLayout()
+        self.clip_length = QSpinBox()
+        self.clip_length.setRange(10, 180)
+        self.clip_length.setSuffix(' сек')
+        self.clip_length.setValue(int(self.setting('clip_length', 30)))
+        form.addRow('Длина клипа', self.clip_length)
+        self.count = QSpinBox()
+        self.count.setRange(1, 12)
+        self.count.setValue(int(self.setting('count', 3)))
+        form.addRow('До клипов с исходника', self.count)
+        self.layout_mode = self.combo([
+            ('Авто · сохранить содержимое', 'auto'),
+            ('Весь кадр + размытый фон', 'fit'),
+            ('Заполнить 9:16 · обрезать края', 'fill'),
+        ], 'layout', 'auto')
+        form.addRow('Кадр 1080 × 1920', self.layout_mode)
+        self.captions = QCheckBox('Субтитры с подсветкой слов + SRT')
+        self.captions.setChecked(self.setting('captions', True, bool))
+        form.addRow(self.captions)
+        self.model = self.combo([
+            ('Small · основной', 'small'), ('Tiny · быстрый черновик', 'tiny'),
+            ('Medium · медленнее, точнее', 'medium'),
+        ], 'model', 'small')
+        form.addRow('Распознавание на CPU', self.model)
+        self.language = self.combo([('Авто', 'auto'), ('Русский', 'ru'), ('English', 'en')], 'language', 'auto')
+        form.addRow('Язык', self.language)
+        self.zoom = QCheckBox('Лёгкий зум на пике реакции')
+        self.zoom.setChecked(self.setting('zoom', False, bool))
+        form.addRow(self.zoom)
+        note = QLabel('Хайлайты выбираются по энергии звука. Тихие видео — равномерные фрагменты. '
+                      'Результаты стоит просмотреть перед публикацией.\n\n'
+                      'Распознавание локальное; модель скачивается при первом использовании. '
+                      'Клипы обрабатываются по одному, без перегрузки ПК.')
+        note.setWordWrap(True)
+        note.setMaximumWidth(360)
+        note.setStyleSheet('color:#9daac0')
+        form.addRow(note)
+        body.addLayout(form, 2)
+        outer.addWidget(self.controls, 2)
+        output_row = QHBoxLayout()
+        output_row.addWidget(QLabel('Сохранять в'))
+        self.output = QLineEdit(str(self.setting('output', str(Path.home() / 'Videos' / 'Verticliv' / 'Reels'))))
+        output_row.addWidget(self.output, 1)
+        self.output_button = self.button('Выбрать папку', self.choose_output, output_row)
+        outer.addLayout(output_row)
+        actions = QHBoxLayout()
+        self.start_button = self.button('Создать подборку', self.start, actions)
+        self.start_button.setStyleSheet('background:#b0f563;color:#111827;font-weight:800;padding:12px 24px')
+        self.cancel_button = self.button('Остановить после текущей операции', self.cancel, actions)
+        self.cancel_button.setEnabled(False)
+        self.progress = QProgressBar()
+        actions.addWidget(self.progress, 1)
+        outer.addLayout(actions)
+        self.status = QLabel('Готов к работе. Автонарезка ничего не публикует сама.')
+        self.status.setWordWrap(True)
+        outer.addWidget(self.status)
+        results = QSplitter(Qt.Orientation.Horizontal)
+        self.results = QListWidget()
+        self.results.itemDoubleClicked.connect(self.open_result)
+        self.results.setToolTip('Двойной клик — посмотреть клип')
+        results.addWidget(self.results)
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setPlaceholderText('Здесь будут замечания по исходникам и итоговый отчёт.')
+        results.addWidget(self.log)
+        outer.addWidget(results, 1)
+        bottom = QHBoxLayout()
+        self.button('Открыть папку результатов', self.open_folder, bottom)
+        self.button('Править выбранный клип', self.edit_result, bottom)
+        self.button('Открыть отчёт', self.open_report, bottom)
+        bottom.addStretch()
+        outer.addLayout(bottom)
+
+    @staticmethod
+    def button(text, callback, layout):
+        button = QPushButton(text)
+        button.clicked.connect(callback)
+        layout.addWidget(button)
+        return button
+
+    def setting(self, key, default, value_type=None):
+        if value_type is None:
+            return self.settings.value('auto_reels/' + key, default)
+        return self.settings.value('auto_reels/' + key, default, type=value_type)
+
+    def combo(self, items, key, default):
+        combo = QComboBox()
+        for label, value in items:
+            combo.addItem(label, value)
+        combo.setCurrentIndex(max(0, combo.findData(self.setting(key, default))))
+        return combo
+
+    @property
+    def busy(self):
+        return self.task is not None
+
+    def source_paths(self):
+        return [self.sources.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.sources.count())]
+
+    def add_paths(self, paths):
+        if self.busy:
+            return
+        existing = {os.path.normcase(p) for p in self.source_paths()}
+        for value in paths:
+            path = Path(value).resolve()
+            if not path.is_file() or path.suffix.lower() not in VIDEO_EXTENSIONS:
+                continue
+            key = os.path.normcase(str(path))
+            if key in existing:
+                continue
+            item = QListWidgetItem(path.name)
+            item.setData(Qt.ItemDataRole.UserRole, str(path))
+            item.setToolTip(str(path))
+            self.sources.addItem(item)
+            existing.add(key)
+        self.summary.setText(f'Исходников: {self.sources.count()}. MP4, MOV, MKV, WebM и другие форматы. '
+                             'Размеры и поворот телефона определяются автоматически.')
+
+    def choose_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, 'Добавить исходники', '', VIDEO_FILTER)
+        self.add_paths(paths)
+
+    def choose_folder(self):
+        name = QFileDialog.getExistingDirectory(self, 'Добавить видео из папки')
+        if name:
+            self.add_paths(sorted(Path(name).iterdir()))
+
+    def remove_selected(self):
+        if not self.busy:
+            for item in self.sources.selectedItems():
+                self.sources.takeItem(self.sources.row(item))
+            self.add_paths([])
+
+    def choose_output(self):
+        name = QFileDialog.getExistingDirectory(self, 'Папка для подборок', self.output.text())
+        if name:
+            self.output.setText(name)
+
+    def dragEnterEvent(self, event):
+        if not self.busy and event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        self.add_paths([url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()])
+        event.acceptProposedAction()
+
+    def start(self):
+        if self.busy:
+            return
+        if not self.source_paths():
+            self.status.setText('Добавь хотя бы одно видео.')
+            return
+        if not self.output.text().strip():
+            self.status.setText('Выбери папку для готовых клипов.')
+            return
+        options = AutoReelsOptions(
+            clip_length=self.clip_length.value(), count=self.count.value(),
+            captions=self.captions.isChecked(), model=self.model.currentData(),
+            language=self.language.currentData(), layout=self.layout_mode.currentData(),
+            zoom=self.zoom.isChecked(), device='cpu',
+        )
+        for key, value in {'clip_length': options.clip_length, 'count': options.count,
+                           'captions': options.captions, 'model': options.model,
+                           'language': options.language, 'layout': options.layout,
+                           'zoom': options.zoom, 'output': self.output.text().strip()}.items():
+            self.settings.setValue('auto_reels/' + key, value)
+        self.results.clear()
+        self.log.clear()
+        self.report_path = ''
+        self.progress.setValue(0)
+        self.status.setText('Подготовка исходников…')
+        self.task = AutoReelsTask(self.source_paths(), Path(self.output.text().strip()), options, self)
+        self.task.progress.connect(self.on_progress)
+        self.task.done.connect(self.completed)
+        self.task.failed.connect(self.failed)
+        self.task.finished.connect(self.idle)
+        self.set_busy(True)
+        self.task.start()
+
+    def set_busy(self, busy):
+        for control in (self.controls, self.output, self.output_button, self.start_button):
+            control.setEnabled(not busy)
+        self.cancel_button.setEnabled(busy)
+        self.busy_changed.emit(busy)
+
+    def on_progress(self, value, text):
+        self.progress.setValue(value)
+        self.status.setText(text)
+
+    def cancel(self):
+        if self.task:
+            self.task.requestInterruption()
+            self.status.setText('Останавливаю обработку. Уже готовые клипы сохранятся. '
+                                'Загрузка модели может завершиться не сразу.')
+
+    def completed(self, result):
+        self.report_path = result.report_path
+        for path in result.outputs:
+            item = QListWidgetItem(Path(path).name)
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            item.setToolTip(path)
+            self.results.addItem(item)
+        if self.results.count():
+            self.results.setCurrentRow(0)
+        lines = list(result.warnings)
+        lines.extend(f'Ошибка · {Path(f.source).name}: {f.error}' for f in result.failures)
+        lines.append('Отчёт: ' + result.report_path)
+        self.log.setPlainText('\n\n'.join(lines))
+        prefix = 'Остановлено' if result.cancelled else 'Подборка готова'
+        self.status.setText(f'{prefix}: {len(result.outputs)} клипов, ошибок: {len(result.failures)}. '
+                            'Двойной клик — просмотр; «Править» — субтитры и кадрирование.')
+        if not result.cancelled:
+            self.progress.setValue(100)
+
+    def failed(self, error):
+        self.status.setText('Не удалось начать обработку: ' + error[:240])
+        self.log.setPlainText(error)
+
+    def idle(self):
+        task, self.task = self.task, None
+        self.set_busy(False)
+        if task is not None:
+            task.deleteLater()
+
+    def open_result(self, item=None):
+        item = item or self.results.currentItem()
+        if item:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(item.data(Qt.ItemDataRole.UserRole)))
+
+    def edit_result(self):
+        if self.busy:
+            return
+        item = self.results.currentItem()
+        if item:
+            project = Path(item.data(Qt.ItemDataRole.UserRole)).with_suffix('.verticliv.json')
+            if project.is_file():
+                self.edit_requested.emit(str(project))
+            else:
+                self.status.setText('Файл проекта не найден. Открой клип в ручном редакторе.')
+
+    def open_folder(self):
+        directory = Path(self.report_path).parent if self.report_path else Path(self.output.text())
+        if directory.is_dir():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.resolve())))
+
+    def open_report(self):
+        if self.report_path and Path(self.report_path).is_file():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.report_path))

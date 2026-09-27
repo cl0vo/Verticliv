@@ -287,7 +287,7 @@ class MainWindow(QMainWindow):
         self.reel_valid = False
         self.brainrot_valid = False
 
-        self.setWindowTitle(f"ARARA Factory {__version__}")
+        self.setWindowTitle(f"Verticliv {__version__}")
         self.resize(1240, 820)
         self.setMinimumSize(990, 680)
 
@@ -298,7 +298,7 @@ class MainWindow(QMainWindow):
         outer.setSpacing(12)
 
         header_row = QHBoxLayout()
-        header = QLabel("ARARA FACTORY")
+        header = QLabel("Verticliv")
         header.setObjectName("title")
         version = QLabel(f"v{__version__} · PERSONAL")
         version.setObjectName("version")
@@ -428,7 +428,7 @@ class MainWindow(QMainWindow):
         settings_layout.setHorizontalSpacing(12)
         settings_layout.setVerticalSpacing(9)
 
-        default_output = Path.home() / "Videos" / "ARARA Factory" / "renders"
+        default_output = Path.home() / "Videos" / "Verticliv" / "renders"
         self.output_picker = FolderPicker(str(self.settings.value("output", str(default_output))))
 
         saved_banner = str(self.settings.value('banner_path', str(DEFAULT_BANNER_PATH)))
@@ -869,7 +869,7 @@ class MainWindow(QMainWindow):
 
         self.pending_update = info
         self.update_button.setText(f"Обновить до v{info.version}")
-        self.status.setText(f"Доступно обновление ARARA Factory v{info.version}")
+        self.status.setText(f"Доступно обновление Verticliv v{info.version}")
         if self.update_check_manual:
             self.offer_update(info)
 
@@ -883,7 +883,7 @@ class MainWindow(QMainWindow):
     def offer_update(self, info: UpdateInfo) -> None:
         answer = QMessageBox.question(
             self,
-            "Обновление ARARA Factory",
+            "Обновление Verticliv",
             (
                 f"Доступна версия v{info.version}.\n\n"
                 "Программа скачает новый установщик, закроется и обновится поверх текущей версии. "
@@ -940,7 +940,7 @@ class MainWindow(QMainWindow):
 def main() -> None:
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    app.setApplicationName("ARARA Factory")
+    app.setApplicationName("Verticliv")
     app.setApplicationVersion(__version__)
     app.setOrganizationName("ARARA")
     app.setStyleSheet(

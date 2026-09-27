@@ -26,7 +26,7 @@ class PublishingRuntimeWindow(PublishingOAuthWindow):
                 "Очередь публикации включена",
                 (
                     "После закрытия расписание остановится. Очередь сохранится и продолжится "
-                    "после следующего запуска ARARA Factory. Закрыть программу?"
+                    "после следующего запуска Verticliv. Закрыть программу?"
                 ),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,

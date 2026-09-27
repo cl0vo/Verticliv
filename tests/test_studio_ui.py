@@ -16,6 +16,7 @@ from arara_factory.transcribe import RecognizedWord
 def test_selection_project_restore_and_word_edits():
     app=QApplication.instance() or QApplication([])
     w=StudioWindow()
+    w.workspaces.setCurrentIndex(1)
     w.info=MediaInfo(640,360,120,30,True)
     w.project=StudioProject(start=15,end=45,layout='gaming',webcam_fraction=.35,zoom=True,
                            words=[RecognizedWord('hello',16,17,.9)],vocabulary='Рошан')

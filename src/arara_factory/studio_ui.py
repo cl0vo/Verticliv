@@ -19,6 +19,8 @@ from .studio_engine import (
     export_video, find_highlights, source_info,
 )
 from .transcribe import RecognizedWord
+from .auto_reels_ui import AutoReelsPanel
+from .version import __version__
 
 
 class Task(QThread):
@@ -163,14 +165,14 @@ class StudioWindow(QMainWindow):
         self.legacy_factory = legacy_factory
         self.legacy = None
         self.last_output = None
-        self.setWindowTitle('Vertical Studio — Reels · Shorts · стримы')
+        self.setWindowTitle(f'Verticliv {__version__} — Reels · Shorts · стримы')
         self.resize(1360, 900)
         self.setAcceptDrops(True)
         root = QWidget()
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
         header = QHBoxLayout()
-        title = QLabel('VERTICAL / STUDIO')
+        title = QLabel('Verticliv / Studio')
         title.setStyleSheet('font-size:24px; font-weight:800; color:#b0f563')
         header.addWidget(title)
         header.addStretch()
@@ -369,6 +371,38 @@ QTableWidget,QListWidget {background:#101a2b;gridline-color:#2e3d52;} QHeaderVie
 QTabBar::tab {padding:9px 20px;background:#1b283d;} QTabBar::tab:selected {color:#b0f563;background:#2a3a50;}
 QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QProgressBar::chunk {background:#689d39;}
 ''')
+        editor_page = self.takeCentralWidget()
+        self.workspaces = QTabWidget()
+        self.auto_reels_panel = AutoReelsPanel()
+        self.workspaces.addTab(self.auto_reels_panel, 'Автонарезка · подборка клипов')
+        self.workspaces.addTab(editor_page, 'Ручной редактор · субтитры и кадр')
+        self.auto_reels_panel.busy_changed.connect(self.auto_busy_changed)
+        self.auto_reels_panel.edit_requested.connect(self.open_auto_project)
+        self.setCentralWidget(self.workspaces)
+
+    def auto_busy_changed(self, busy):
+        if busy:
+            self.player.pause()
+        self.workspaces.setTabEnabled(1, not busy)
+
+    def open_auto_project(self, name):
+        if self.task and self.task.isRunning():
+            return
+        if self.project.source:
+            answer = QMessageBox.question(
+                self, 'Открыть клип в редакторе?',
+                'Текущие несохранённые правки редактора будут заменены проектом клипа. Продолжить?',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        try:
+            project = StudioProject.load(Path(name))
+            self.open_video(project.source, project)
+            self.workspaces.setCurrentIndex(1)
+        except Exception as exc:
+            self.failed(str(exc))
 
     @staticmethod
     def button(text, callback, layout):
@@ -418,7 +452,7 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
             self.open_video(name)
 
     def open_video(self,name,project=None):
-        if self.task and self.task.isRunning():
+        if (self.task and self.task.isRunning()) or self.auto_reels_panel.busy:
             return
         try:
             info = source_info(name)
@@ -435,13 +469,16 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
             QMessageBox.warning(self,'Не удалось открыть видео',str(exc))
 
     def dragEnterEvent(self,event):
-        if event.mimeData().hasUrls() and not (self.task and self.task.isRunning()):
+        if event.mimeData().hasUrls() and not (self.task and self.task.isRunning()) and not self.auto_reels_panel.busy:
             event.acceptProposedAction()
 
     def dropEvent(self,event):
-        urls = event.mimeData().urls()
-        if urls and urls[0].isLocalFile():
-            self.open_video(urls[0].toLocalFile())
+        paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+        if len(paths) > 1 or self.workspaces.currentIndex() == 0:
+            self.auto_reels_panel.add_paths(paths)
+            self.workspaces.setCurrentIndex(0)
+        elif paths:
+            self.open_video(paths[0])
 
     def on_frame(self,frame):
         image = frame.toImage()
@@ -491,7 +528,7 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
         return copy.deepcopy(self.project)
 
     def launch(self,operation,done):
-        if self.task and self.task.isRunning():
+        if (self.task and self.task.isRunning()) or self.auto_reels_panel.busy:
             return
         self.player.pause()
         self.task = Task(operation,self)
@@ -505,6 +542,7 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
         self.cancel_button.setEnabled(True)
         self.progress.setValue(0)
         self.status.setText('Подготовка…')
+        self.workspaces.setTabEnabled(0, False)
         self.task.start()
 
     def on_progress(self,value,text):
@@ -512,6 +550,7 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
         self.status.setText(text)
 
     def idle(self):
+        self.workspaces.setTabEnabled(0, True)
         self.editor.setEnabled(True)
         for control in (self.import_button,self.open_project_button,self.save_project_button,self.legacy_button,self.export_button,self.preview_button):
             control.setEnabled(True)
@@ -666,15 +705,18 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
     def save_project(self):
         try:
             p = self.checked_project()
-            name,_ = QFileDialog.getSaveFileName(self,'Сохранить проект','','Проект Vertical (*.vertical.json)')
+            suggested = str(Path(p.source).with_suffix('.verticliv.json'))
+            name,_ = QFileDialog.getSaveFileName(self,'Сохранить проект',suggested,'Проект Verticliv (*.verticliv.json)')
             if name:
+                if not name.lower().endswith('.json'):
+                    name += '.verticliv.json'
                 p.save(Path(name))
                 self.status.setText('Проект сохранён. Исходное видео хранится отдельно.')
         except Exception as exc:
             self.failed(str(exc))
 
     def load_project(self):
-        name,_ = QFileDialog.getOpenFileName(self,'Открыть проект','','Проект Vertical (*.json)')
+        name,_ = QFileDialog.getOpenFileName(self,'Открыть проект','','Проекты Verticliv (*.verticliv.json *.vertical.json);;JSON-проекты (*.json)')
         if name:
             try:
                 p = StudioProject.load(Path(name))
@@ -695,6 +737,10 @@ QProgressBar {border:1px solid #344259;border-radius:4px;text-align:center;} QPr
             self.legacy.raise_()
 
     def closeEvent(self,event):
+        if self.auto_reels_panel.busy:
+            self.auto_reels_panel.cancel()
+            event.ignore()
+            return
         if self.task and self.task.isRunning():
             self.cancel()
             self.status.setText('Дождись отмены обработки перед закрытием окна.')

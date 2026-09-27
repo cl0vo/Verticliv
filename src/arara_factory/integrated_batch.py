@@ -16,6 +16,7 @@ from .app import MainWindow
 from .batch import BatchPlan, format_timestamp, load_plan, reset_progress
 from .batch_worker import BatchRenderWorker
 from .render import MAX_REEL_SECONDS, RenderOptions
+from .version import __version__
 
 
 class IntegratedBatchWindow(MainWindow):
@@ -27,7 +28,7 @@ class IntegratedBatchWindow(MainWindow):
         self._long_source_duration = 0.0
         super().__init__()
 
-        self.setWindowTitle(f"ARARA Factory {self.windowTitle().split()[-1]}")
+        self.setWindowTitle(f"Verticliv {__version__}")
         self.reel_card.title_label.setText("1. ЗАПИСЬ ARARA")
         self.reel_card.hint_label.setText(
             "Выбери готовый короткий Reel или длинную запись. Длинное видео программа "

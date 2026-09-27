@@ -1,4 +1,4 @@
-name: Build Windows installer
+name: Build Verticliv Windows installer
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: arara-windows-${{ github.ref }}
+  group: verticliv-windows-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -100,7 +100,7 @@ jobs:
               else:
                   secret_file.write_bytes(previous)
 
-          print(f'ARARA source validation OK: {package}')
+          print(f'Verticliv source validation OK: {package}')
           '@ | python -
           pytest -q
 
@@ -140,7 +140,7 @@ jobs:
               QMessageBox.question = original_question
 
           app.processEvents()
-          print('ARARA reliable UI smoke test OK')
+          print('Verticliv reliable UI smoke test OK')
           '@ | python -
 
       - name: Download FFmpeg
@@ -153,6 +153,13 @@ jobs:
           if (-not $bin -or -not $probe) { throw 'FFmpeg download incomplete' }
           Copy-Item $bin.FullName ffmpeg.exe
           Copy-Item $probe.FullName ffprobe.exe
+
+      - name: Verify real Studio and automatic batch exports
+        shell: pwsh
+        run: |
+          $env:PATH = "$pwd;$env:PATH"
+          pytest -q tests/test_studio.py tests/test_auto_reels.py
+          if ($LASTEXITCODE -ne 0) { throw 'Media regression tests failed' }
 
       - name: Smoke-test real render and queue migration
         shell: pwsh
@@ -219,7 +226,7 @@ jobs:
           _, brain = canonical_layout(info.width, info.height)
           pixel = image.getpixel((brain.x + brain.width // 2, brain.y + brain.height // 2))
           assert pixel[0] > 120 and pixel[0] > pixel[2] + 60, pixel
-          print('ARARA real render smoke test OK')
+          print('Verticliv real render smoke test OK')
           '@ | python -
 
       - name: Build Windows application
@@ -230,11 +237,13 @@ jobs:
             '--clean',
             '--windowed',
             '--onedir',
-            '--name', 'ARARA-Factory',
+            '--name', 'Verticliv',
             '--paths', 'src',
             '--hidden-import', 'arara_factory.entry',
             '--hidden-import', 'arara_factory.studio_ui',
             '--hidden-import', 'arara_factory.studio_engine',
+            '--hidden-import', 'arara_factory.auto_reels',
+            '--hidden-import', 'arara_factory.auto_reels_ui',
             '--collect-all', 'faster_whisper',
             '--collect-all', 'ctranslate2',
             '--collect-all', 'tokenizers',
@@ -274,8 +283,8 @@ jobs:
             'launcher.py'
           )
           python -m PyInstaller @args
-          if (-not (Test-Path 'dist\ARARA-Factory\ARARA-Factory.exe')) {
-            throw 'ARARA Factory executable missing'
+          if (-not (Test-Path 'dist\Verticliv\Verticliv.exe')) {
+            throw 'Verticliv executable missing'
           }
 
       - name: Install Inno Setup
@@ -292,22 +301,22 @@ jobs:
         run: |
           $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           & $compiler 'installer\arara_factory.iss'
-          if (-not (Test-Path 'installer-output\ARARA-Factory-Setup.exe')) {
+          if (-not (Test-Path 'installer-output\Verticliv-Setup.exe')) {
             throw 'Installer was not created'
           }
 
       - name: Upload installer
         uses: actions/upload-artifact@v6
         with:
-          name: ARARA-Factory-Installer
-          path: installer-output/ARARA-Factory-Setup.exe
+          name: Verticliv-Installer
+          path: installer-output/Verticliv-Setup.exe
           if-no-files-found: error
 
       - name: Upload portable app
         uses: actions/upload-artifact@v6
         with:
-          name: ARARA-Factory-Portable
-          path: dist/ARARA-Factory/**
+          name: Verticliv-Portable
+          path: dist/Verticliv/**
           if-no-files-found: error
 
       - name: Publish update release
@@ -319,21 +328,25 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
           $tag = "v$version"
-          $asset = 'installer-output/ARARA-Factory-Setup.exe'
+          $asset = 'installer-output/Verticliv-Setup.exe'
+          # Existing installations search for the old asset name. Both names
+          # must deliver the same upgrade installer after the repository rename.
+          $legacyAsset = 'installer-output/ARARA-Factory-Setup.exe'
+          Copy-Item -LiteralPath $asset -Destination $legacyAsset
           $repo = $env:GITHUB_REPOSITORY
 
           $existing = gh release list --repo $repo --limit 100 --json tagName | ConvertFrom-Json
           $exists = @($existing | Where-Object { $_.tagName -eq $tag }).Count -gt 0
           if ($exists) {
-            gh release upload $tag $asset --repo $repo --clobber
+            gh release upload $tag $asset $legacyAsset --repo $repo --clobber
           } else {
-            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "Vertical Studio: editable Whisper captions, gaming layouts and saved projects; reliable YouTube uploads, safe queues, validated renders and a configurable alpha banner."
+            gh release create $tag $asset $legacyAsset --repo $repo --target $env:GITHUB_SHA --title "Verticliv $version" --notes "Verticliv: editable Whisper captions, gaming layouts and saved projects; reliable YouTube uploads, safe queues, validated renders and a configurable alpha banner. Existing settings, queues and accounts are retained. The legacy installer filename is a compatibility alias."
           }
           if ($LASTEXITCODE -ne 0) { throw 'Release publish failed' }
 
           $release = gh release view $tag --repo $repo --json assets | ConvertFrom-Json
           $names = @($release.assets | ForEach-Object { $_.name })
-          if ($names -notcontains 'ARARA-Factory-Setup.exe') {
+          if ($names -notcontains 'Verticliv-Setup.exe' -or $names -notcontains 'ARARA-Factory-Setup.exe') {
             throw 'Release installer asset missing'
           }
           Write-Host "Published $tag"

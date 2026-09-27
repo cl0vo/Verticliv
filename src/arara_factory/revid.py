@@ -87,7 +87,7 @@ def wait_for_video(api_key: str, pid: str, *, timeout_seconds: int = 1800, poll_
 
 def download_video(url: str, destination: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    request = urllib.request.Request(url, headers={"User-Agent": "ARARA-Factory/0.2"})
+    request = urllib.request.Request(url, headers={"User-Agent": "Verticliv"})
     with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as output:
         while chunk := response.read(1024 * 1024):
             output.write(chunk)

@@ -356,7 +356,7 @@ class ReliablePublishingWindow(TargetAwareSmartWindow):
             for state in job.deliveries.values():
                 if state.status == "uploading":
                     state.status = "failed"
-                    state.error = "Загрузка прервана при закрытии ARARA Factory."
+                    state.error = "Загрузка прервана при закрытии Verticliv."
                     state.updated_at = now
                     interrupted += 1
         self.publish_queue.save()
@@ -397,7 +397,7 @@ class ReliablePublishingWindow(TargetAwareSmartWindow):
         if not self._confirmed_close:
             answer = QMessageBox.question(
                 self,
-                "Закрыть ARARA Factory?",
+                "Закрыть Verticliv?",
                 "Ты уверен, что хочешь закрыть программу? Все очереди и настройки сохранятся.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
